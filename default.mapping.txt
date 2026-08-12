@@ -1,7 +1,7 @@
 # --- NETWORK SETTINGS ---
 IP: 192.168.86.36
 PORT: 7700
-MIDI_PORT: 
+MIDI_PORT: IAC Driver Bus 1
 
 # --- MAPPINGS ---
 # Syntax: <type> <channel 0-15> <number 0-127> -> <OSC-path>

@@ -21,6 +21,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.group.dev.dependencies]
 pyinstaller = "^6.22.0"
 poethepoet = "^0.48.0"
+mypy = "^2.3.0"
 
 [tool.poe.tasks]
 clean = "rm -rf build bin *.spec"

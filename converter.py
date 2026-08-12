@@ -1,48 +1,84 @@
 """MIDI listening and OSC routing logic."""
 
+from typing import Any, Dict, List, Tuple, Union
 import mido
 from pythonosc import udp_client
 from rich.console import Console
 
 console = Console()
 
+# Use a set for O(1) lookup time instead of tuple evaluation inside the loop
+SUPPORTED_TYPES = {"note_on", "note_off", "control_change", "program_change", "sysex"}
 
-def run_converter(port_name: str, osc_ip: str, osc_port: int, mappings: dict):
+
+def run_converter(port_name: str, osc_ip: str, osc_port: int, mappings: Dict[Tuple[str, Any, Any], str]) -> None:
     """Main loop listening on MIDI port and dispatching OSC messages."""
     client = udp_client.SimpleUDPClient(osc_ip, osc_port)
 
     with mido.open_input(port_name) as inport:  # pylint: disable=no-member
         for msg in inport:
-            if msg.type not in ("note_on", "note_off", "control_change"):
+            if msg.type not in SUPPORTED_TYPES:
                 continue
 
-            num = msg.note if msg.type in ("note_on", "note_off") else msg.control
-            lookup_type = "note_on" if msg.type in ("note_on", "note_off") else "control_change"
-            key = (lookup_type, msg.channel, num)
+            # 1. Parse incoming MIDI message into uniform internal format
+            msg_type = msg.type
+            if msg_type in ("note_on", "note_off"):
+                channel = msg.channel
+                num = msg.note
+                # Treat velocity 0 as note_off logically if needed, but lookup key uses note_on
+                val = 0 if msg_type == "note_off" else msg.velocity
+                lookup_type = "note_on"
+                midi_sig = f"note {channel} {num}"
+                default_addr = f"/midi/channel/{channel}/note_on" if msg_type == "note_on" else f"/midi/channel/{channel}/note_off"
+                default_val: Union[int, List[int]] = [num, val]
 
-            # 1. Custom mapped rule match
+            elif msg_type == "control_change":
+                channel = msg.channel
+                num = msg.control
+                val = msg.value
+                lookup_type = "control_change"
+                midi_sig = f"cc {channel} {num}"
+                default_addr = f"/midi/channel/{channel}/cc/{num}"
+                default_val = val
+
+            elif msg_type == "program_change":
+                channel = msg.channel
+                num = msg.program
+                val = msg.program
+                lookup_type = "program_change"
+                midi_sig = f"pc {channel} {num}"
+                default_addr = f"/midi/channel/{channel}/program_change"
+                default_val = val
+
+            elif msg_type == "sysex":
+                channel = None
+                num = None
+                val = list(msg.data)
+                lookup_type = "sysex"
+                midi_sig = "sysex"
+                default_addr = "/midi/sysex"
+                default_val = val
+
+            key = (lookup_type, channel, num)
+
+            # 2. Dispatch mapped or default OSC message
             if key in mappings:
                 osc_addr = mappings[key]
-                if msg.type == "note_on":
-                    client.send_message(osc_addr, [msg.velocity])
-                    console.print(f"[bold green]MAPPED ->[/bold green] {osc_addr} [dim][{msg.velocity}][/dim]")
-                elif msg.type == "note_off":
-                    client.send_message(osc_addr, [0])
-                    console.print(f"[bold green]MAPPED ->[/bold green] {osc_addr} [dim][0][/dim]")
-                elif msg.type == "control_change":
-                    client.send_message(osc_addr, msg.value)
-                    console.print(f"[bold green]MAPPED ->[/bold green] {osc_addr} [dim][{msg.value}][/dim]")
+                send_val = val
+                val_str = " ".join(map(str, send_val)) if isinstance(send_val, (list, tuple)) else str(send_val)
 
-            # 2. Fallback unmapped routing
+                client.send_message(osc_addr, send_val)
+                console.print(
+                    f"[bold cyan]MIDI IN:[/bold cyan] [white]{midi_sig:<12}[/white] ➔ "
+                    f"[bold green]MAPPED ->[/bold green] {osc_addr} [bold yellow]{val_str}[/bold yellow]"
+                )
             else:
-                if msg.type == "note_on":
-                    addr = f"/midi/channel/{msg.channel}/note_on"
-                    client.send_message(addr, [msg.note, msg.velocity])
-                elif msg.type == "note_off":
-                    addr = f"/midi/channel/{msg.channel}/note_off"
-                    client.send_message(addr, [msg.note, 0])
-                elif msg.type == "control_change":
-                    addr = f"/midi/channel/{msg.channel}/cc/{msg.control}"
-                    client.send_message(addr, msg.value)
+                osc_addr = default_addr
+                send_val = default_val
+                val_str = " ".join(map(str, send_val)) if isinstance(send_val, (list, tuple)) else str(send_val)
 
-                console.print(f"[dim]DEFAULT -> {addr}[/dim]")
+                client.send_message(osc_addr, send_val)
+                console.print(
+                    f"[bold cyan]MIDI IN:[/bold cyan] [white]{midi_sig:<12}[/white] ➔ "
+                    f"[dim]DEFAULT -> {osc_addr}[/dim] [yellow]{val_str}[/yellow]"
+                )
