@@ -10,80 +10,86 @@ from rich.table import Table
 from config import select_config_file, parse_config
 from converter import run_converter
 
+# Tvinger konsollen til å bruke standard bakgrunnsfarger
 console = Console()
 
 
 def main():
-    # 0. Tøm terminalen ved oppstart for et rent, mørkt utseende
+    # 0. Clear terminal for a fresh view
     console.clear()
 
-    # 1. Vis et moderne oppstarts-banner
+    # 1. Display modern startup banner with forced dark background
     console.print(
         Panel.fit(
-            "[bold cyan]🎛️  MIDI TO OSC CONVERTER[/bold cyan]\n"
-            "[dim]High-Performance Bridge for Live Performance & Stage Automation[/dim]",
-            border_style="bold magenta",
+            "[bold bright_cyan]🎛️  MIDI TO OSC CONVERTER[/bold bright_cyan]\n"
+            "[bright_white]High-Performance Bridge for Live Performance & Stage Automation[/bright_white]",
+            border_style="magenta",
+            style="white on black",
             padding=(1, 4),
-            subtitle="[dim]Press Ctrl+C to stop[/dim]",
+            subtitle="[dim white]Press Ctrl+C to stop[/dim white]",
         )
     )
     console.print()
 
-    # 2. Velg og les inn konfigurasjonsfil
+    # 2. Select and parse configuration file
     selected_file = select_config_file()
-    console.print(f"[bold green]✔ Active config:[/bold green] [bold white]{selected_file.name}[/bold white]\n")
+    console.print(
+        f"[bold bright_green]✔ Active config:[/bold bright_green] "
+        f"[bold bright_white]{selected_file.name}[/bold bright_white]\n"
+    )
 
     config = parse_config(selected_file)
     osc_ip = config["ip"]
     osc_port = config["port"]
     mappings = config["mappings"]
 
-    # 3. Hent og velg MIDI-port
+    # 3. Fetch and select MIDI port
     input_names = mido.get_input_names()  # pylint: disable=no-member
     if not input_names:
-        console.print("[bold red]✖ Error:[/bold red] No MIDI input ports found!")
+        console.print("[bold bright_red]✖ Error:[/bold bright_red] No MIDI input ports found!")
         sys.exit(1)
 
     port_name = config["midi_port"]
     if not port_name or port_name not in input_names:
         table = Table(
-            title="[bold yellow]Available MIDI Input Ports[/bold yellow]",
+            title="[bold bright_yellow]Available MIDI Input Ports[/bold bright_yellow]",
             show_header=True,
-            header_style="bold cyan",
-            border_style="dim",
+            header_style="bold bright_cyan",
+            border_style="bright_black",
+            style="white on black",
         )
-        table.add_column("Index", style="bold green", justify="center", width=8)
-        table.add_column("Port Name", style="bold white")
+        table.add_column("Index", style="bold bright_green", justify="center", width=8)
+        table.add_column("Port Name", style="bold bright_white")
 
         for i, name in enumerate(input_names):
             table.add_row(str(i), name)
 
         console.print(table)
-        
-        # Bruk Rich sin Prompt for penere inntastingslinje
-        choice = Prompt.ask("\n[bold cyan]Select port index[/bold cyan]", default="0")
+
+        choice = Prompt.ask("\n[bold bright_cyan]Select port index[/bold bright_cyan]", default="0")
         port_index = int(choice) if choice.isdigit() and int(choice) < len(input_names) else 0
         port_name = input_names[port_index]
 
-    # 4. Status-panel før lytting starter
+    # 4. Status panel before starting loop
     console.print()
     console.print(
         Panel(
-            f"[bold green]Listening on MIDI:[/bold green] [white]'{port_name}'[/white]\n"
-            f"[bold green]Target OSC Address:[/bold green] [white]{osc_ip}:{osc_port}[/white]\n"
-            f"[bold green]Custom Mappings Loaded:[/bold green] [white]{len(mappings)}[/white]",
-            title="[bold cyan]System Status[/bold cyan]",
-            border_style="cyan",
+            f"[bold bright_green]Listening on MIDI:[/bold bright_green] [bright_white]'{port_name}'[/bright_white]\n"
+            f"[bold bright_green]Target OSC Address:[/bold bright_green] [bright_white]{osc_ip}:{osc_port}[/bright_white]\n"
+            f"[bold bright_green]Custom Mappings Loaded:[/bold bright_green] [bright_white]{len(mappings)}[/bright_white]",
+            title="[bold bright_cyan]System Status[/bold bright_cyan]",
+            border_style="bright_cyan",
+            style="white on black",
             expand=False,
         )
     )
-    console.print("\n[dim]Waiting for incoming MIDI events...[/dim]\n")
+    console.print("\n[dim white]Waiting for incoming MIDI events...[/dim white]\n")
 
-    # 5. Start konverteringsløkken
+    # 5. Start conversion loop
     try:
         run_converter(port_name, osc_ip, osc_port, mappings)
     except KeyboardInterrupt:
-        console.print("\n[bold yellow]👋 Exited by user.[/bold yellow]\n")
+        console.print("\n[bold bright_yellow]👋 Exited by user.[/bold bright_yellow]\n")
 
 
 if __name__ == "__main__":
