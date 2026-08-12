@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build on ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -20,7 +20,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact_name: midi2osc-macos
+            artifact_name: midi2osc-macos-arm64
+          - os: macos-13
+            artifact_name: midi2osc-macos-x86_64
           - os: ubuntu-latest
             artifact_name: midi2osc-linux
           - os: windows-latest
