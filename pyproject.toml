@@ -1,0 +1,27 @@
+[project]
+name = "midi2osc"
+version = "0.1.0"
+description = "Konverterer inngående MIDI til OSC-kommandoer"
+authors = [
+    {name = "Harald Haugerud", email = "harald.haugerud@oda.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.16"
+dependencies = [
+    "mido (>=1.3.3,<2.0.0)",
+    "python-rtmidi (>=1.5.8,<2.0.0)",
+    "python-osc (>=1.10.2,<2.0.0)",
+    "rich (>=15.0.0,<16.0.0)"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+[tool.poetry.group.dev.dependencies]
+pyinstaller = "^6.22.0"
+poethepoet = "^0.48.0"
+
+[tool.poe.tasks]
+clean = "rm -rf build bin *.spec"
+build-app = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi main.py"
+build = ["clean", "build-app"]
