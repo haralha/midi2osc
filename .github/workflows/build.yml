@@ -10,9 +10,21 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact_name: midi2osc-macos
+          - os: ubuntu-latest
+            artifact_name: midi2osc-linux
+          - os: windows-latest
+            artifact_name: midi2osc-windows
 
     steps:
       - name: Check out repository
@@ -23,23 +35,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Poetry & Poe
-        run: |
-          pipx install poetry
-          poetry self add poethepoet
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install Poe plugin
+        run: poetry self add poethepoet
 
       - name: Install project dependencies
-        run: |
-          poetry install --no-root
+        run: poetry install --no-root
 
       - name: Build executable
-        run: |
-          poetry run poe build
+        run: poetry run poe build
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: midi2osc-executable
+          name: ${{ matrix.artifact_name }}
           path: bin/
 
       - name: Create GitHub Release
