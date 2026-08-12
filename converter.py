@@ -3,15 +3,17 @@
 from typing import Any, Dict, List, Tuple, Union
 import mido
 from pythonosc import udp_client
-from rich.console import Console
-
-console = Console()
 
 # Use a set for O(1) lookup time instead of tuple evaluation inside the loop
 SUPPORTED_TYPES = {"note_on", "note_off", "control_change", "program_change", "sysex"}
 
 
-def run_converter(port_name: str, osc_ip: str, osc_port: int, mappings: Dict[Tuple[str, Any, Any], str]) -> None:
+def run_converter(
+    port_name: str,
+    osc_ip: str,
+    osc_port: int,
+    mappings: Dict[Tuple[str, Any, Any], str],
+) -> None:
     """Main loop listening on MIDI port and dispatching OSC messages."""
     client = udp_client.SimpleUDPClient(osc_ip, osc_port)
 
@@ -29,7 +31,11 @@ def run_converter(port_name: str, osc_ip: str, osc_port: int, mappings: Dict[Tup
                 val = 0 if msg_type == "note_off" else msg.velocity
                 lookup_type = "note_on"
                 midi_sig = f"note {channel} {num}"
-                default_addr = f"/midi/channel/{channel}/note_on" if msg_type == "note_on" else f"/midi/channel/{channel}/note_off"
+                default_addr = (
+                    f"/midi/channel/{channel}/note_on"
+                    if msg_type == "note_on"
+                    else f"/midi/channel/{channel}/note_off"
+                )
                 default_val: Union[int, List[int]] = [num, val]
 
             elif msg_type == "control_change":
@@ -65,20 +71,26 @@ def run_converter(port_name: str, osc_ip: str, osc_port: int, mappings: Dict[Tup
             if key in mappings:
                 osc_addr = mappings[key]
                 send_val = val
-                val_str = " ".join(map(str, send_val)) if isinstance(send_val, (list, tuple)) else str(send_val)
+                val_str = (
+                    " ".join(map(str, send_val))
+                    if isinstance(send_val, (list, tuple))
+                    else str(send_val)
+                )
 
                 client.send_message(osc_addr, send_val)
-                console.print(
-                    f"[bold cyan]MIDI IN:[/bold cyan] [white]{midi_sig:<12}[/white] ➔ "
-                    f"[bold green]MAPPED ->[/bold green] {osc_addr} [bold yellow]{val_str}[/bold yellow]"
+                print(
+                    f"MIDI IN: {midi_sig:<12} ➔ MAPPED  -> {osc_addr} [{val_str}]"
                 )
             else:
                 osc_addr = default_addr
                 send_val = default_val
-                val_str = " ".join(map(str, send_val)) if isinstance(send_val, (list, tuple)) else str(send_val)
+                val_str = (
+                    " ".join(map(str, send_val))
+                    if isinstance(send_val, (list, tuple))
+                    else str(send_val)
+                )
 
                 client.send_message(osc_addr, send_val)
-                console.print(
-                    f"[bold cyan]MIDI IN:[/bold cyan] [white]{midi_sig:<12}[/white] ➔ "
-                    f"[dim]DEFAULT -> {osc_addr}[/dim] [yellow]{val_str}[/yellow]"
+                print(
+                    f"MIDI IN: {midi_sig:<12} ➔ DEFAULT -> {osc_addr} [{val_str}]"
                 )

@@ -1,91 +1,154 @@
-"""Main entrypoint for the MIDI to OSC Converter CLI."""
-
 import sys
-import mido
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.table import Table
+import threading
+from datetime import datetime
+from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QVBoxLayout,
+    QLabel,
+    QTextEdit,
+    QWidget,
+)
 
 from config import select_config_file, parse_config
 from converter import run_converter
 
-console = Console()
+
+class SignalStream(QObject):
+    """Thread-safe redirection of stdout to PySide6 with line buffering."""
+
+    text_written = Signal(str)
+
+    def write(self, text):
+        # Only send if there is actual content (ignore empty newlines)
+        if text.strip():
+            self.text_written.emit(text.strip())
+
+    def flush(self):
+        pass
+
+
+class MainWindow(QMainWindow):
+
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("MIDI to OSC Converter")
+        self.resize(680, 450)
+        self.setMinimumSize(680, 450)
+
+        # Main layout
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Header
+        title = QLabel("🎛️ MIDI TO OSC CONVERTER")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 5px;")
+        layout.addWidget(title)
+
+        subtitle = QLabel("High-Performance Bridge for Live Performance")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet("color: #888888; font-size: 11px; margin-bottom: 5px;")
+        layout.addWidget(subtitle)
+
+        # Dark console/terminal text box
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+
+        # Limit log to a maximum of 1000 lines for stability and low memory usage
+        self.log_area.document().setMaximumBlockCount(1000)
+
+        # Uses native macOS monospace fonts and removes inner padding
+        self.log_area.setStyleSheet("""
+            QTextEdit {
+                background-color: #121212;
+                color: #e0e0e0;
+                font-family: "Menlo", "Monaco", "Courier New", monospace;
+                font-size: 12px;
+                border: 1px solid #2a2a2a;
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+        layout.addWidget(self.log_area)
+
+        # Redirect stdout
+        self.stream = SignalStream()
+        self.stream.text_written.connect(self.append_log_line)
+        sys.stdout = self.stream
+
+        # Start the engine
+        self.start_engine()
+
+    def append_log_line(self, line_text: str):
+        """Formats the text as raw terminal HTML without extra spacing."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        # Colorize keywords if present in the string
+        formatted = line_text
+        if "MIDI IN:" in formatted:
+            formatted = formatted.replace(
+                "MIDI IN:",
+                "<span style='color: #4CAF50; font-weight: bold;'>MIDI IN:</span>",
+            )
+        if "MAPPED" in formatted:
+            formatted = formatted.replace(
+                "MAPPED",
+                "<span style='color: #00E676; font-weight: bold;'>MAPPED </span>",
+            )
+        if "DEFAULT" in formatted:
+            formatted = formatted.replace(
+                "DEFAULT", "<span style='color: #FFB74D;'>DEFAULT</span>"
+            )
+        if "Listening on MIDI" in formatted or "Target OSC" in formatted:
+            formatted = f"<span style='color: #29B6F6;'>{formatted}</span>"
+        if "Error" in formatted or "Invalid" in formatted:
+            formatted = (
+                f"<span style='color: #FF5252; font-weight: bold;'>{formatted}</span>"
+            )
+
+        # Construct final HTML line with timestamp
+        html_line = f"<span style='color: #555555;'>[{timestamp}]</span> {formatted}"
+
+        # Insert directly at the bottom of the console without extra line breaks
+        cursor = self.log_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_area.setTextCursor(cursor)
+        self.log_area.insertHtml(html_line + "<br>")
+        self.log_area.ensureCursorVisible()
+
+    def start_engine(self):
+        def worker():
+            try:
+                selected_file = select_config_file()
+                config = parse_config(selected_file)
+
+                print(f"✔ Active config: {selected_file.name}")
+                print(f"Listening on MIDI: '{config['midi_port']}'")
+                print(f"Target OSC: {config['ip']}:{config['port']}")
+                print("Waiting for incoming MIDI events...")
+
+                run_converter(
+                    config["midi_port"],
+                    config["ip"],
+                    config["port"],
+                    config["mappings"],
+                )
+            except Exception as e:
+                print(f"✖ Error: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
 def main():
-    # 0. Clear terminal for a fresh view
-    console.clear()
-
-    # 1. Display modern startup banner (Tilpasset universelle farger)
-    console.print(
-        Panel.fit(
-            "[bold magenta]🎛️  MIDI TO OSC CONVERTER[/bold magenta]\n"
-            "[blue]High-Performance Bridge for Live Performance & Stage Automation[/blue]",
-            border_style="magenta",
-            padding=(1, 4),
-            subtitle="[blue]Press Ctrl+C to stop[/blue]",
-        )
-    )
-    console.print()
-
-    # 2. Select and parse configuration file
-    selected_file = select_config_file()
-    console.print(
-        f"[bold green]✔ Active config:[/bold green] "
-        f"[bold]{selected_file.name}[/bold]\n"
-    )
-
-    config = parse_config(selected_file)
-    osc_ip = config["ip"]
-    osc_port = config["port"]
-    mappings = config["mappings"]
-
-    # 3. Fetch and select MIDI port
-    input_names = mido.get_input_names()  # pylint: disable=no-member
-    if not input_names:
-        console.print("[bold red]✖ Error:[/bold red] No MIDI input ports found!")
-        sys.exit(1)
-
-    port_name = config["midi_port"]
-    if not port_name or port_name not in input_names:
-        table = Table(
-            title="[bold magenta]Available MIDI Input Ports[/bold magenta]",
-            show_header=True,
-            header_style="bold blue",
-            border_style="magenta",
-        )
-        table.add_column("Index", style="bold green", justify="center", width=8)
-        table.add_column("Port Name", style="bold")
-
-        for i, name in enumerate(input_names):
-            table.add_row(str(i), name)
-
-        console.print(table)
-
-        choice = Prompt.ask("\n[bold blue]Select port index[/bold blue]", default="0")
-        port_index = int(choice) if choice.isdigit() and int(choice) < len(input_names) else 0
-        port_name = input_names[port_index]
-
-    # 4. Status panel before starting loop
-    console.print()
-    console.print(
-        Panel(
-            f"[bold green]Listening on MIDI:[/bold green] [bold]'{port_name}'[/bold]\n"
-            f"[bold green]Target OSC Address:[/bold green] [bold]{osc_ip}:{osc_port}[/bold]\n"
-            f"[bold green]Custom Mappings Loaded:[/bold green] [bold]{len(mappings)}[/bold]",
-            title="[bold magenta]System Status[/bold magenta]",
-            border_style="magenta",
-            expand=False,
-        )
-    )
-    console.print("\n[blue]Waiting for incoming MIDI events...[/blue]\n")
-
-    # 5. Start conversion loop
-    try:
-        run_converter(port_name, osc_ip, osc_port, mappings)
-    except KeyboardInterrupt:
-        console.print("\n[bold magenta]👋 Exited by user.[/bold magenta]\n")
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

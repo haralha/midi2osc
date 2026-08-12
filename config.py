@@ -2,10 +2,6 @@
 
 import sys
 from pathlib import Path
-from rich.console import Console
-from rich.table import Table
-
-console = Console()
 
 DEFAULT_TXT_CONFIG = """# --- NETWORK SETTINGS ---
 IP: 192.168.86.36
@@ -21,14 +17,18 @@ cc 0 7    -> /composition/master/volume
 
 
 def get_app_dir() -> Path:
-    """Find the directory where the executable or script is located."""
+    """Find the root directory where the executable or main script is located."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
+        exec_path = Path(sys.executable)
+        # Håndterer macOS .app bundles (går ut av Contents/MacOS)
+        if exec_path.parent.name == "MacOS" and "Contents" in exec_path.parts:
+            return exec_path.parents[2].parent
+        return exec_path.parent
     return Path(__file__).parent
 
 
 def select_config_file() -> Path:
-    """Search for *.mapping.txt files and prompt user to select one."""
+    """Search for *.mapping.txt files and return the active one."""
     app_dir = get_app_dir()
     config_files = sorted(list(app_dir.glob("*.mapping.txt")))
     legacy_config = app_dir / "mapping.txt"
@@ -39,33 +39,19 @@ def select_config_file() -> Path:
     # 1. If no config files exist, create 'default.mapping.txt'
     if not config_files:
         default_file = app_dir / "default.mapping.txt"
-        console.print(f"[bold yellow]No config files found. Creating '{default_file.name}'...[/bold yellow]")
+        print(f"No config files found. Creating '{default_file.name}'...")
         with open(default_file, "w", encoding="utf-8") as f:
             f.write(DEFAULT_TXT_CONFIG)
         return default_file
 
-    # 2. If only one config file exists, use it directly
-    if len(config_files) == 1:
-        console.print(f"[dim]Loading available config: {config_files[0].name}[/dim]")
-        return config_files[0]
-
-    # 3. If multiple config files exist, display selection menu
-    table = Table(title="Available Configuration Files", show_header=True, header_style="bold cyan")
-    table.add_column("Index", style="dim", width=6)
-    table.add_column("Filename", style="bold")
-
-    for i, file_path in enumerate(config_files):
-        table.add_row(str(i), file_path.name)
-
-    console.print(table)
-    choice = input("\nSelect config file [default 0]: ").strip()
-    index = int(choice) if choice.isdigit() and int(choice) < len(config_files) else 0
-    return config_files[index]
+    # 2. Return first found config file automatically in GUI context
+    print(f"Loading active config: {config_files[0].name}")
+    return config_files[0]
 
 
 def parse_config(config_path: Path) -> dict:
     """Read and parse the selected mapping file."""
-    config = {
+    config: dict = {
         "ip": "127.0.0.1",
         "port": 7700,
         "midi_port": "",
@@ -83,13 +69,16 @@ def parse_config(config_path: Path) -> dict:
             if line.upper().startswith("IP:"):
                 config["ip"] = line.split(":", 1)[1].strip()
             elif line.upper().startswith("PORT:"):
-                config["port"] = int(line.split(":", 1)[1].strip())
+                try:
+                    config["port"] = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    print(f"Invalid PORT value in config: {line}")
             elif line.upper().startswith("MIDI_PORT:"):
                 config["midi_port"] = line.split(":", 1)[1].strip()
 
             # Mapping lines (e.g.: note 0 60 -> /my/osc/path)
             elif "->" in line:
-                left, osc_address = line.split("->")
+                left, osc_address = line.split("->", 1)
                 osc_address = osc_address.strip()
                 parts = left.strip().split()
 
@@ -102,6 +91,6 @@ def parse_config(config_path: Path) -> dict:
                         number = int(parts[2])
                         config["mappings"][(msg_type, channel, number)] = osc_address
                     except ValueError:
-                        console.print(f"[bold red]Invalid config line:[/bold red] {line}")
+                        print(f"Invalid config line: {line}")
 
     return config
