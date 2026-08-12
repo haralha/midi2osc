@@ -30,7 +30,7 @@ jobs:
 
       - name: Install project dependencies
         run: |
-          poetry install
+          poetry install --no-root
 
       - name: Build executable
         run: |
