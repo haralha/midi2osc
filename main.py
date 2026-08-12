@@ -17,14 +17,14 @@ def main():
     # 0. Clear terminal for a fresh view
     console.clear()
 
-    # 1. Display modern startup banner without forcing black background
+    # 1. Display modern startup banner (Tilpasset universelle farger)
     console.print(
         Panel.fit(
-            "[bold cyan]🎛️  MIDI TO OSC CONVERTER[/bold cyan]\n"
-            "[dim]High-Performance Bridge for Live Performance & Stage Automation[/dim]",
+            "[bold magenta]🎛️  MIDI TO OSC CONVERTER[/bold magenta]\n"
+            "[blue]High-Performance Bridge for Live Performance & Stage Automation[/blue]",
             border_style="magenta",
             padding=(1, 4),
-            subtitle="[dim]Press Ctrl+C to stop[/dim]",
+            subtitle="[blue]Press Ctrl+C to stop[/blue]",
         )
     )
     console.print()
@@ -50,10 +50,10 @@ def main():
     port_name = config["midi_port"]
     if not port_name or port_name not in input_names:
         table = Table(
-            title="[bold yellow]Available MIDI Input Ports[/bold yellow]",
+            title="[bold magenta]Available MIDI Input Ports[/bold magenta]",
             show_header=True,
-            header_style="bold cyan",
-            border_style="dim",
+            header_style="bold blue",
+            border_style="magenta",
         )
         table.add_column("Index", style="bold green", justify="center", width=8)
         table.add_column("Port Name", style="bold")
@@ -63,7 +63,7 @@ def main():
 
         console.print(table)
 
-        choice = Prompt.ask("\n[bold cyan]Select port index[/bold cyan]", default="0")
+        choice = Prompt.ask("\n[bold blue]Select port index[/bold blue]", default="0")
         port_index = int(choice) if choice.isdigit() and int(choice) < len(input_names) else 0
         port_name = input_names[port_index]
 
@@ -74,18 +74,18 @@ def main():
             f"[bold green]Listening on MIDI:[/bold green] [bold]'{port_name}'[/bold]\n"
             f"[bold green]Target OSC Address:[/bold green] [bold]{osc_ip}:{osc_port}[/bold]\n"
             f"[bold green]Custom Mappings Loaded:[/bold green] [bold]{len(mappings)}[/bold]",
-            title="[bold cyan]System Status[/bold cyan]",
-            border_style="cyan",
+            title="[bold magenta]System Status[/bold magenta]",
+            border_style="magenta",
             expand=False,
         )
     )
-    console.print("\n[dim]Waiting for incoming MIDI events...[/dim]\n")
+    console.print("\n[blue]Waiting for incoming MIDI events...[/blue]\n")
 
     # 5. Start conversion loop
     try:
         run_converter(port_name, osc_ip, osc_port, mappings)
     except KeyboardInterrupt:
-        console.print("\n[bold yellow]👋 Exited by user.[/bold yellow]\n")
+        console.print("\n[bold magenta]👋 Exited by user.[/bold magenta]\n")
 
 
 if __name__ == "__main__":
