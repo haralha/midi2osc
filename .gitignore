@@ -14,7 +14,6 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-.python-version
 
 # --- Poetry & Cache ---
 .pytest_cache/

@@ -21,10 +21,12 @@ jobs:
             artifact_name: midi2osc-macos-arm64
             is_mac: true
             target_arch: arm64
+            macos_deployment_target: "11.0"
           - os: macos-15-intel
             artifact_name: midi2osc-macos-x86_64
             is_mac: true
             target_arch: x86_64
+            macos_deployment_target: "10.15"
           - os: ubuntu-latest
             artifact_name: midi2osc-linux
             is_mac: false
@@ -52,20 +54,22 @@ jobs:
         run: poetry env use 3.11
 
       - name: Install project dependencies
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: poetry install
 
       # Build for macOS ARM64 (Apple Silicon)
       - name: Build executable (macOS ARM64)
         if: matrix.is_mac == true && matrix.target_arch == 'arm64'
         env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: poetry run poe build-mac
 
       # Build for macOS Intel x86_64
       - name: Build executable (macOS Intel x86_64)
         if: matrix.is_mac == true && matrix.target_arch == 'x86_64'
         env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: poetry run poe build-mac
 
       # Build for Windows / Linux

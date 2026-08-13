@@ -15,7 +15,7 @@ Designed for live performances, stage automation, and media software such as Res
 
 ## Prerequisites
 
-- **Python 3.12+**
+- **Python 3.11** (3.12+ is not supported; the GUI is pinned to PySide6 6.4 for older macOS)
 - **pipx** (recommended for standalone installation) or **Poetry** (for local development)
 
 ---
