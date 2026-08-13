@@ -19,7 +19,7 @@ jobs:
         include:
           - os: macos-latest
             artifact_name: midi2osc-macos-arm64
-          - os: macos-13
+          - os: macos-14
             artifact_name: midi2osc-macos-x86_64
           - os: ubuntu-latest
             artifact_name: midi2osc-linux
