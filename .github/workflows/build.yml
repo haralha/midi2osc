@@ -38,11 +38,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # Her spesifiserer vi arkitekturen basert på matrisen!
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
           architecture: ${{ matrix.target_arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install Poetry
@@ -51,14 +50,14 @@ jobs:
       - name: Install project dependencies
         run: poetry install --no-root
 
-      # Build for macOS ARM64
+      # Build for macOS ARM64 (Apple Silicon)
       - name: Build executable (macOS ARM64)
         if: matrix.is_mac == true && matrix.target_arch == 'arm64'
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: poetry run poe build-mac
 
-      # Build for macOS Intel x86_64
+      # Build for macOS Intel x86_64 (støtter macOS 10.15 Catalina og nyere)
       - name: Build executable (macOS Intel x86_64)
         if: matrix.is_mac == true && matrix.target_arch == 'x86_64'
         env:
