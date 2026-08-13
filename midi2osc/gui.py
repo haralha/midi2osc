@@ -1,0 +1,427 @@
+"""PySide6 GUI entrypoint for MIDI to OSC Converter."""
+
+from __future__ import annotations
+
+import html
+import logging
+import os
+import subprocess
+import sys
+import threading
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal, QObject, QSettings, QTimer
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTextEdit,
+    QWidget,
+    QFileDialog,
+    QMessageBox,
+)
+
+from midi2osc.config import EXAMPLE_CONFIG, parse_config
+from midi2osc.converter import MidiPortError, run_from_config
+from midi2osc.logging_utils import setup_logging
+
+logger = logging.getLogger("midi2osc")
+
+LOG_FLUSH_MS = 50
+ENGINE_JOIN_TIMEOUT_S = 2.0
+ENGINE_REOPEN_PAUSE_S = 0.15
+
+
+class QtLogEmitter(QObject):
+    """Bridge logging records onto the Qt event loop."""
+
+    text_written = Signal(str)
+
+
+class QtLogHandler(logging.Handler):
+    """Thread-safe logging handler that emits plain text to Qt."""
+
+    def __init__(self, emitter: QtLogEmitter) -> None:
+        super().__init__()
+        self.emitter = emitter
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.emitter.text_written.emit(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.setWindowTitle("MIDI to OSC Converter")
+        self.resize(600, 520)
+        self.setMinimumSize(600, 400)
+
+        self.current_thread: threading.Thread | None = None
+        self.stop_event: threading.Event | None = None
+        self.active_config_path: Path | None = None
+        self._log_buffer: deque[str] = deque()
+
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        layout = QVBoxLayout(central_widget)
+        layout.setSpacing(4)
+        layout.setContentsMargins(10, 8, 10, 8)
+
+        title = QLabel("MIDI TO OSC CONVERTER")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 2px;")
+        layout.addWidget(title)
+
+        subtitle = QLabel("High-Performance Bridge for Live Performance")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet("color: #888888; font-size: 12px; margin-bottom: 4px;")
+        layout.addWidget(subtitle)
+
+        action_buttons_bar = QHBoxLayout()
+        action_buttons_bar.setSpacing(6)
+        action_buttons_bar.setContentsMargins(0, 0, 0, 2)
+
+        self.btn_open = QPushButton("Open...")
+        self.btn_open.setToolTip("Open a mapping configuration file")
+        self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open.setStyleSheet(self._button_style())
+        self.btn_open.clicked.connect(self.browse_config_file)
+        action_buttons_bar.addWidget(self.btn_open)
+
+        self.btn_edit = QPushButton("Edit")
+        self.btn_edit.setToolTip("Open active config file in the default system text editor")
+        self.btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_edit.setStyleSheet(self._button_style())
+        self.btn_edit.clicked.connect(self.open_config_file)
+        action_buttons_bar.addWidget(self.btn_edit)
+
+        self.btn_reload = QPushButton("Reload")
+        self.btn_reload.setToolTip("Reload current configuration file to apply changes")
+        self.btn_reload.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reload.setStyleSheet(self._button_style())
+        self.btn_reload.clicked.connect(self.reload_config)
+        action_buttons_bar.addWidget(self.btn_reload)
+
+        self.btn_new_template = QPushButton("New Template")
+        self.btn_new_template.setToolTip("Create a new example mapping configuration file")
+        self.btn_new_template.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_template.setStyleSheet(self._button_style())
+        self.btn_new_template.clicked.connect(self.create_new_template)
+        action_buttons_bar.addWidget(self.btn_new_template)
+
+        action_buttons_bar.addStretch()
+        layout.addLayout(action_buttons_bar)
+
+        config_label = QLabel("Config File:")
+        config_label.setStyleSheet(
+            "color: #aaaaaa; font-size: 12px; font-weight: bold; margin-top: 2px;"
+        )
+        layout.addWidget(config_label)
+
+        self.input_config_path = QLineEdit()
+        self.input_config_path.setReadOnly(True)
+        self.input_config_path.setPlaceholderText("No configuration file selected...")
+        self.input_config_path.setStyleSheet(
+            """
+            QLineEdit {
+                background-color: #2a2a2a;
+                color: #ffffff;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 4px 6px;
+                font-size: 12px;
+                margin-bottom: 2px;
+            }
+            """
+        )
+        layout.addWidget(self.input_config_path)
+
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        self.log_area.document().setMaximumBlockCount(1000)
+        self.log_area.setStyleSheet(
+            """
+            QTextEdit {
+                background-color: #121212;
+                color: #e0e0e0;
+                font-family: "Menlo", "Monaco", "Courier New", monospace;
+                font-size: 12px;
+                border: 1px solid #2a2a2a;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            """
+        )
+        layout.addWidget(self.log_area)
+
+        self._log_emitter = QtLogEmitter()
+        self._log_emitter.text_written.connect(self._enqueue_log_line)
+        self._log_handler = QtLogHandler(self._log_emitter)
+        setup_logging(handler=self._log_handler)
+
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(LOG_FLUSH_MS)
+        self._log_timer.timeout.connect(self._flush_log_buffer)
+        self._log_timer.start()
+
+        settings = QSettings("midi2osc", "MIDI2OSC")
+        last_path_str = settings.value("last_config_path", "")
+        last_file = Path(str(last_path_str)) if last_path_str else None
+        default_file = Path("default.mapping.txt")
+
+        if last_file and last_file.exists():
+            self.load_config(last_file)
+        elif default_file.exists():
+            self.load_config(default_file)
+        else:
+            logger.info(
+                "Please select a config file using 'Open...' or create a 'New Template'."
+            )
+
+    def _button_style(self) -> str:
+        return """
+            QPushButton {
+                background-color: #383838;
+                color: #ffffff;
+                border: 1px solid #555555;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                border-color: #00E676;
+            }
+            QPushButton:pressed {
+                background-color: #222222;
+                border-color: #333333;
+            }
+        """
+
+    def browse_config_file(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Mapping Configuration",
+            "",
+            "Mapping Files (*.mapping.txt);;Text Files (*.txt);;All Files (*)",
+        )
+        if file_path:
+            self.load_config(Path(file_path))
+
+    def open_config_file(self) -> None:
+        """Open the currently active config file in the default text editor."""
+        if not self.active_config_path or not self.active_config_path.exists():
+            QMessageBox.warning(
+                self,
+                "No Config File",
+                "No valid configuration file is currently selected to edit.",
+            )
+            return
+
+        file_str = str(self.active_config_path.resolve())
+
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", file_str], check=True)
+            elif sys.platform == "win32":
+                os.startfile(file_str)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", file_str], check=True)
+            logger.info("Opened '%s' in external text editor.", self.active_config_path.name)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Error Opening File",
+                f"Could not open file in system editor:\n{exc}",
+            )
+
+    def reload_config(self) -> None:
+        """Reload the currently active config file."""
+        if not self.active_config_path or not self.active_config_path.exists():
+            QMessageBox.warning(
+                self,
+                "No Config File",
+                "No valid configuration file is currently selected to reload.",
+            )
+            return
+
+        logger.info("Reloading active config: %s", self.active_config_path.name)
+        self.load_config(self.active_config_path)
+
+    def create_new_template(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create New Mapping Template",
+            "default.mapping.txt",
+            "Mapping Files (*.mapping.txt);;Text Files (*.txt)",
+        )
+        if file_path:
+            target_path = Path(file_path)
+            try:
+                target_path.write_text(EXAMPLE_CONFIG.strip() + "\n", encoding="utf-8")
+                logger.info("Created template at: %s", target_path.name)
+                self.load_config(target_path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Failed to create template: {exc}")
+
+    def load_config(self, config_path: Path) -> None:
+        self.active_config_path = config_path
+        self.input_config_path.setText(str(config_path.resolve()))
+
+        settings = QSettings("midi2osc", "MIDI2OSC")
+        settings.setValue("last_config_path", str(config_path.resolve()))
+
+        logger.info("Loading configuration: %s", config_path.name)
+        self.start_engine(config_path)
+
+    def _enqueue_log_line(self, line_text: str) -> None:
+        self._log_buffer.append(line_text)
+
+    def _flush_log_buffer(self) -> None:
+        if not self._log_buffer:
+            return
+
+        chunks: list[str] = []
+        while self._log_buffer:
+            chunks.append(self._format_log_line(self._log_buffer.popleft()))
+
+        cursor = self.log_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_area.setTextCursor(cursor)
+        self.log_area.insertHtml("".join(chunks))
+        self.log_area.ensureCursorVisible()
+
+    def _format_log_line(self, line_text: str) -> str:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        safe_text = html.escape(line_text)
+
+        formatted = safe_text
+        if "MIDI IN:" in formatted:
+            formatted = formatted.replace(
+                "MIDI IN:",
+                "<span style='color: #4CAF50; font-weight: bold;'>MIDI IN:</span>",
+            )
+        if "UNMAPPED" in formatted:
+            formatted = formatted.replace(
+                "UNMAPPED",
+                "<span style='color: #888888; font-weight: bold;'>UNMAPPED</span>",
+            )
+        elif "MAPPED" in formatted:
+            formatted = formatted.replace(
+                "MAPPED",
+                "<span style='color: #00E676; font-weight: bold;'>MAPPED</span>",
+            )
+        if "DEFAULT" in formatted:
+            formatted = formatted.replace(
+                "DEFAULT",
+                "<span style='color: #FFB74D;'>DEFAULT</span>",
+            )
+        if any(
+            k in formatted
+            for k in (
+                "Listening on MIDI",
+                "Target OSC",
+                "Active config",
+                "Loading",
+                "Opened",
+                "Created",
+                "Convert unmapped",
+                "Mappings loaded",
+                "Reloading",
+            )
+        ):
+            formatted = f"<span style='color: #29B6F6;'>{formatted}</span>"
+        if any(k in formatted for k in ("Error", "Invalid", "✖", "failed", "lost")):
+            formatted = (
+                f"<span style='color: #FF5252; font-weight: bold;'>{formatted}</span>"
+            )
+
+        return f"<span style='color: #555555;'>[{timestamp}]</span> {formatted}<br>"
+
+    def stop_current_engine(self) -> None:
+        """Signal the running converter thread to stop cleanly."""
+        if self.stop_event:
+            self.stop_event.set()
+        if self.current_thread and self.current_thread.is_alive():
+            self.current_thread.join(timeout=ENGINE_JOIN_TIMEOUT_S)
+            if self.current_thread.is_alive():
+                logger.warning(
+                    "Previous MIDI engine did not stop within %.1fs",
+                    ENGINE_JOIN_TIMEOUT_S,
+                )
+        self.current_thread = None
+        self.stop_event = None
+
+    def start_engine(self, config_path: Path) -> None:
+        if not config_path or not config_path.exists():
+            logger.error("Invalid or missing config file.")
+            return
+
+        self.stop_current_engine()
+        # Brief pause so OS MIDI backends can release the previous handle.
+        if ENGINE_REOPEN_PAUSE_S > 0:
+            threading.Event().wait(ENGINE_REOPEN_PAUSE_S)
+
+        self.stop_event = threading.Event()
+        stop_event = self.stop_event
+
+        def worker() -> None:
+            try:
+                config = parse_config(config_path)
+                logger.info("Active config: %s", config_path.name)
+                logger.info("Listening on MIDI: '%s'", config.midi_port)
+                logger.info("Waiting for incoming MIDI events...")
+                run_from_config(config, stop_event=stop_event, reconnect=True)
+            except MidiPortError as exc:
+                logger.error("%s", exc)
+            except Exception as exc:
+                logger.error("Error: %s", exc)
+
+        self.current_thread = threading.Thread(target=worker, daemon=True)
+        self.current_thread.start()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """Clean shutdown when closing GUI window."""
+        self._log_timer.stop()
+        self.stop_current_engine()
+        root = logging.getLogger("midi2osc")
+        if self._log_handler in root.handlers:
+            root.removeHandler(self._log_handler)
+        event.accept()
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+    app.setApplicationName("MIDI2OSC")
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSBundle  # type: ignore[import-not-found]
+
+            bundle = NSBundle.mainBundle()
+            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            if info is not None:
+                info["CFBundleName"] = "MIDI2OSC"
+        except ImportError:
+            pass
+
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

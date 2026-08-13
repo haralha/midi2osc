@@ -1,30 +1,30 @@
 # MIDI to OSC Converter
 
-A lightweight GUI and CLI application that converts incoming MIDI messages (`Note On/Off`, `Control Change`) into OSC packets over UDP.
+A lightweight GUI and CLI application that converts incoming MIDI messages (`Note On/Off`, `Control Change`, `Program Change`, SysEx) into OSC packets over UDP.
 
 Designed for live performances, stage automation, and media software such as Resolume, QLab, TouchDesigner, and Ableton Live.
 
 ## Features
 
-- Human-readable `*.mapping.txt` configs for MIDI note and CC routing
+- Human-readable `*.mapping.txt` configs for MIDI note, CC, and program routing
 - Multi-profile support — pick a preset (e.g. `resolume.mapping.txt`, `qlab.mapping.txt`) at launch
 - Native integer OSC arguments for velocity and CC values (`0–127`)
 - Fallback routing for unmapped messages (e.g. `/midi/channel/0/note_on`)
+- Automatic reconnect when a MIDI device drops
 - GUI built with PySide6 for easy control, alongside a headless CLI tool
 
 ## Prerequisites
 
 - **Python 3.12+**
-- **pipx** (Recommended for standalone installation) or **Poetry** (for local development)
+- **pipx** (recommended for standalone installation) or **Poetry** (for local development)
 
 ---
 
 ## Installation via `pipx` (Recommended)
 
-`pipx` installs the application into an isolated environment and exposes the commands globally without interfering with your system's Python setup. This is ideal for older systems or stage computers where you want a reliable, hassle-free installation.
+`pipx` installs the application into an isolated environment and exposes the commands globally.
 
 ### 1. Install `pipx`
-If you haven't installed `pipx` yet, make sure Python 3.12+ is installed, then run:
 
 **On macOS (via Homebrew):**
 ```bash
@@ -37,13 +37,13 @@ pipx ensurepath
 python3 -m pip install --user pipx
 python3 -m pipx ensurepath
 ```
-(Restart your terminal after running ensurepath)
+(Restart your terminal after running `ensurepath`.)
 
-#### 2. Install midi2osc
+### 2. Install midi2osc
 
-Directly from GitHub:
+From GitHub:
 ```bash
-pipx install git+https://github.com/your-username/midi2osc.git
+pipx install git+https://github.com/haralha/midi2osc.git
 ```
 
 Or from a local clone:
@@ -55,73 +55,90 @@ pipx install .
 
 ### 3. Usage via pipx
 
-Once installed, you can launch the app directly from any terminal window:
-
-Launch GUI:
 ```bash
-midi2osc-gui
-```
-
-Launch CLI:
-```bash
-midi2osc
-```
-
-To update to the latest version in the future:
-```bash
-pipx upgrade midi2osc
+midi2osc-gui          # GUI
+midi2osc              # CLI
+midi2osc -d           # list MIDI devices
+pipx upgrade midi2osc # update later
 ```
 
 ## Development & Local Execution
-If you want to modify the source code or develop locally using Poetry:
+
 ```bash
-git clone [https://github.com/your-username/midi2osc.git](https://github.com/your-username/midi2osc.git)
+git clone https://github.com/haralha/midi2osc.git
 cd midi2osc
 poetry install
 ```
 
-Run GUI:
 ```bash
 poetry run poe gui
-```
-
-Run CLI:
-```bash
 poetry run poe cli
+poetry run poe test
 ```
 
-## Configuration (*.mapping.txt)
-Any *.mapping.txt file next to the app is treated as a preset. If none exist at startup, default.mapping.txt is created automatically. A legacy mapping.txt is also recognized.
+## Configuration (`*.mapping.txt`)
 
-Example
+Use a `*.mapping.txt` file. Generate a starter template with:
+
+```bash
+midi2osc --generate-config
 ```
---- NETWORK SETTINGS ---
-IP: 127.0.0.1
-PORT: 7700
-MIDI_PORT: IAC Driver Bus 1
 
---- MAPPINGS ---
-Syntax:  <channel 0-15> <number 0-127> ->
+### Example
 
+```
+# Channels are 0-15 (MIDI channel 1 = 0 in this file).
+# Notes/CC numbers are 0-127.
+
+midi_port = "IAC Driver Bus 1"
+ip = "127.0.0.1"
+port = 8000
+convert_unmapped = true
+
+# note / note_on maps both note-on and note-off (incl. note_on velocity 0)
 note 0 60 -> /resolume/layer1/clip1/connect
 note 0 61 -> /qlab/cue/1/start
 cc 0 7 -> /composition/master/volume
+pc 0 1 -> /qlab/cue/2/start
 ```
 
-Directives
-IP: Target OSC IP (default: 127.0.0.1)
-PORT: Target OSC UDP port (default: 7700)
-MIDI_PORT: Exact MIDI input device name. If empty or missing, an interactive menu is shown at startup
-Mappings: note or cc, then channel, note/CC number, ->, and the OSC address
+### Settings
 
-## Building Executables (Standalone Packaging)
-Standalone binaries can be compiled locally or via GitHub Actions using PyInstaller and poethepoet:
+| Key | Description |
+|-----|-------------|
+| `midi_port` | MIDI input device name (exact preferred; unique substring also works) |
+| `ip` / `host` | Target OSC IP (default `127.0.0.1`) |
+| `port` / `osc_port` | Target OSC UDP port (default `7700`) |
+| `convert_unmapped` | If `true`, unmapped messages are sent to `/midi/...` defaults; if `false`, they are only logged |
+
+### Mapping syntax
+
+```
+<event> <channel 0-15> <number 0-127> -> /osc/address
+sysex -> /midi/sysex
+```
+
+Event aliases: `note` / `note_on`, `cc` / `control`, `pc` / `program`.
+
+**Note semantics:** `note_on` with velocity `0` is treated as note-off (MIDI convention). A single `note` mapping covers both on and off; the OSC value is the velocity (`0` for off).
+
+### CLI overrides
 
 ```bash
-poetry run poe build
+midi2osc -c show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
+midi2osc -c show.mapping.txt --quiet
+midi2osc -c show.mapping.txt --no-reconnect
 ```
 
-The compiled binaries will be output to the bin/ directory.
+## Building Executables
 
-License
+```bash
+poetry run poe build        # Windows / Linux
+poetry run poe build-mac    # macOS
+```
+
+Binaries are written to `bin/`.
+
+## License
+
 Distributed under the MIT License. See LICENSE for details.

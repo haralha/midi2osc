@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Converts incoming MIDI events to OSC commands"
 authors = [
 ]
-readme = "README.md"
+readme = "readme.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "mido (>=1.3.3,<2.0.0)",
@@ -14,8 +14,12 @@ dependencies = [
     "colorama (>=0.4.6,<0.5.0)"
 ]
 
+[project.scripts]
+midi2osc = "midi2osc.cli:main"
+midi2osc-gui = "midi2osc.gui:main"
+
 [tool.poetry]
-package-mode = false
+packages = [{ include = "midi2osc" }]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -25,27 +29,33 @@ build-backend = "poetry.core.masonry.api"
 pyinstaller = "^6.22.0"
 poethepoet = "^0.48.0"
 mypy = "^2.3.0"
+pytest = "^8.3.0"
 
 [tool.mypy]
 python_version = "3.12"
+packages = ["midi2osc"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.poe.tasks]
-# Local execution tasks
 cli = "python cli.py"
 gui = "python gui.py"
+test = "pytest"
 
 # Cleanup tasks
 clean = "rm -rf build bin *.spec"
 clean-temp = "rm -rf build *.spec"
 
 # Build task for CLI executable (single-file across all OS)
-build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi cli.py"
+build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi --hidden-import midi2osc cli.py"
 
 # Build task for macOS GUI (uses --onedir to bundle .app properly and avoid duplicate Dock icons)
-build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi gui.py"
+build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
 
 # Build task for Windows and Linux GUI (uses --onefile to output a single executable)
-build-gui-single = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi gui.py"
+build-gui-single = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
 
 # Compound build task for macOS
 build-mac = ["clean", "build-cli", "build-gui-mac", "clean-temp"]
