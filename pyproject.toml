@@ -12,7 +12,8 @@ dependencies = [
     "python-rtmidi (>=1.5.8,<2.0.0)",
     "python-osc (>=1.10.2,<2.0.0)",
     "pyside6 (>=6.11.1,<7.0.0)",
-    "platformdirs (>=4.11.2,<5.0.0)"
+    "platformdirs (>=4.11.2,<5.0.0)",
+    "colorama (>=0.4.6,<0.5.0)"
 ]
 
 [tool.poetry]
@@ -28,6 +29,9 @@ poethepoet = "^0.48.0"
 mypy = "^2.3.0"
 
 [tool.poe.tasks]
+cli = "python cli.py"
+gui = "python gui.py"
 clean = "rm -rf build bin *.spec"
-build-app = "pyinstaller --onefile --windowed --distpath bin --name MIDI2OSC --hidden-import mido.backends.rtmidi main.py"
-build = ["clean", "build-app"]
+build-cli = "pyinstaller --onefile --distpath bin --name midi2osc cli.py"
+build-gui = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui gui.py"
+build = ["clean", "build-cli", "build-gui"]

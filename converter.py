@@ -15,9 +15,24 @@ def run_converter(
     mappings: Dict[Tuple[str, Any, Any], str],
 ) -> None:
     """Main loop listening on MIDI port and dispatching OSC messages."""
+
+    # 0. Resolve matching MIDI port if an exact name match is not provided
+    available_ports = mido.get_input_names()  # type: ignore[attr-defined]
+    target_port = port_name
+
+    if port_name not in available_ports:
+        # Perform a case-insensitive partial match search
+        matched = [p for p in available_ports if port_name.lower() in p.lower()]
+        if matched:
+            target_port = matched[0]
+        else:
+            raise RuntimeError(
+                f"MIDI Port '{port_name}' not found. Available ports: {available_ports}"
+            )
+
     client = udp_client.SimpleUDPClient(osc_ip, osc_port)
 
-    with mido.open_input(port_name) as inport:  # pylint: disable=no-member
+    with mido.open_input(target_port) as inport:  # pylint: disable=no-member
         for msg in inport:
             if msg.type not in SUPPORTED_TYPES:
                 continue
