@@ -35,7 +35,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Mer stabil måte å installere Poetry på tvers av macOS Intel, ARM, Linux og Windows
       - name: Install Poetry
         uses: snok/install-poetry@v1
         with:
@@ -43,11 +42,8 @@ jobs:
           virtualenvs-create: true
           virtualenvs-in-project: true
 
-      - name: Install Poe plugin
-        run: poetry self add poethepoet
-
       - name: Install project dependencies
-        run: poetry install --no-root
+        run: poetry install
 
       - name: Build executable
         run: poetry run poe build
@@ -58,7 +54,6 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: bin/
 
-  # Egen jobb for Release – kjører KUN når alle bygg er fullført, og kun ved tags
   release:
     name: Create GitHub Release
     needs: build
@@ -77,4 +72,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          
