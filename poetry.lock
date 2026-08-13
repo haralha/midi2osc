@@ -419,18 +419,6 @@ files = [
 ]
 
 [[package]]
-name = "platformdirs"
-version = "4.11.2"
-description = "A small Python package for determining appropriate platform-specific dirs, e.g. a `user data dir`."
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "platformdirs-4.11.2-py3-none-any.whl", hash = "sha256:7f89089b6ea71bda7962953edcf784b2e2d9d285b40ad88be2bb75c6e9d82ab4"},
-    {file = "platformdirs-4.11.2.tar.gz", hash = "sha256:3a2ae5fca3520a01ab1be8b45613537f52ddf5b5f6f53d88233892dfbf0cd82d"},
-]
-
-[[package]]
 name = "poethepoet"
 version = "0.48.0"
 description = "A task runner that works well with poetry and uv."
@@ -751,4 +739,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.15"
-content-hash = "215f2ba27c0ec9acc34d7552d0723e715e7c0bfc2b61ed21bacb8120dce97485"
+content-hash = "9a2877e2728ee522615ccd48093dc99710715920baa447abff166dafca669e11"

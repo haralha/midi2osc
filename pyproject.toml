@@ -1,7 +1,7 @@
 [project]
 name = "midi2osc"
 version = "0.1.0"
-description = "Konverterer inngående MIDI til OSC-kommandoer"
+description = "Converts incoming MIDI events to OSC commands"
 authors = [
     {name = "Harald Haugerud", email = "harald.haugerud@oda.com"}
 ]
@@ -28,10 +28,25 @@ poethepoet = "^0.48.0"
 mypy = "^2.3.0"
 
 [tool.poe.tasks]
+# Local execution tasks
 cli = "python cli.py"
 gui = "python gui.py"
+
+# Cleanup tasks
 clean = "rm -rf build bin *.spec"
 clean-temp = "rm -rf build *.spec"
+
+# Build task for CLI executable (single-file across all OS)
 build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi cli.py"
-build-gui = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi gui.py"
-build = ["clean", "build-cli", "build-gui", "clean-temp"]
+
+# Build task for macOS GUI (uses --onedir to bundle .app properly and avoid duplicate Dock icons)
+build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi gui.py"
+
+# Build task for Windows and Linux GUI (uses --onefile to output a single executable)
+build-gui-single = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi gui.py"
+
+# Compound build task for macOS
+build-mac = ["clean", "build-cli", "build-gui-mac", "clean-temp"]
+
+# Default compound build task for Windows and Linux
+build = ["clean", "build-cli", "build-gui-single", "clean-temp"]
