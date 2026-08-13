@@ -3,13 +3,30 @@
 import argparse
 import sys
 from pathlib import Path
+import mido
 from colorama import init, Fore, Style
 
-from config import parse_config, select_config_file, get_available_config_files
+from config import parse_config
 from converter import run_converter
 
-# Initialiser colorama (sørger for at fargekoder fungerer på både Windows, Mac og Linux)
+# Initialize colorama (ensures ANSI color codes work on Windows, macOS, and Linux)
 init(autoreset=True)
+
+EXAMPLE_CONFIG = """# midi2osc Configuration File Example
+# -----------------------------------------------
+# MIDI Port / Device Name
+midi_port = "Network Session 1"
+
+# Target OSC Destination
+ip = "127.0.0.1"
+port = 8000
+
+# MIDI to OSC Mappings
+# Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH]
+# Examples:
+# note_on 1 60 -> /trigger/note
+# cc 1 7 -> /volume
+"""
 
 
 class ColorStream:
@@ -25,7 +42,7 @@ class ColorStream:
 
         formatted = text
 
-        # Fargelegg nøkkelord i terminalen
+        # Highlight keywords in the terminal
         if "MIDI IN:" in formatted:
             formatted = formatted.replace(
                 "MIDI IN:", f"{Fore.GREEN}{Style.BRIGHT}MIDI IN:{Style.RESET_ALL}"
@@ -43,11 +60,24 @@ class ColorStream:
         if any(k in formatted for k in ("Error", "Invalid", "✖")):
             formatted = f"{Fore.RED}{Style.BRIGHT}{formatted}{Style.RESET_ALL}"
 
-        # Fjernet + "\n" her for å unngå dobbel linjeavstand
         self.original_stdout.write(formatted)
 
     def flush(self):
         self.original_stdout.flush()
+
+
+def list_midi_devices() -> None:
+    """Prints all available MIDI input ports."""
+    try:
+        inputs = mido.get_input_names()
+        print(f"{Fore.CYAN}Available MIDI Input Devices:{Style.RESET_ALL}")
+        if not inputs:
+            print("  (No MIDI input devices found)")
+            return
+        for name in inputs:
+            print(f"  - {name}")
+    except Exception as e:
+        print(f"{Fore.RED}✖ Error querying MIDI devices: {e}{Style.RESET_ALL}")
 
 
 def main() -> None:
@@ -61,34 +91,71 @@ def main() -> None:
         help="Path to mapping configuration file (*.mapping.txt)",
     )
     parser.add_argument(
-        "-l",
-        "--list-configs",
+        "-d",
+        "--list-devices",
         action="store_true",
-        help="List available configuration files and exit",
+        help="List available MIDI input devices and exit",
+    )
+    parser.add_argument(
+        "--example-config",
+        action="store_true",
+        help="Print an example mapping configuration file to stdout and exit",
+    )
+    parser.add_argument(
+        "--generate-config",
+        action="store_true",
+        help="Create a 'default.mapping.txt' template in the current directory and exit",
     )
 
     args = parser.parse_args()
 
-    # List configs if requested
-    if args.list_configs:
-        print(f"{Fore.CYAN}Available configuration files:{Style.RESET_ALL}")
-        for cfg in get_available_config_files():
-            print(f"  - {cfg}")
+    # 1. List available MIDI devices
+    if args.list_devices:
+        list_midi_devices()
         sys.exit(0)
 
-    # Resolve config file path
+    # 2. Print example config template directly to stdout
+    if args.example_config:
+        print(EXAMPLE_CONFIG.strip())
+        sys.exit(0)
+
+    # 3. Generate a new default.mapping.txt if it does not exist
+    if args.generate_config:
+        out_path = Path("default.mapping.txt")
+        if out_path.exists():
+            print(
+                f"{Fore.RED}✖ Error: 'default.mapping.txt' already exists in this directory.{Style.RESET_ALL}"
+            )
+            sys.exit(1)
+
+        out_path.write_text(EXAMPLE_CONFIG.strip(), encoding="utf-8")
+        print(f"{Fore.GREEN}✔ Created 'default.mapping.txt' successfully!{Style.RESET_ALL}")
+        sys.exit(0)
+
+    # 4. Resolve configuration file path
     if args.config:
         config_path = args.config
         if not config_path.exists():
             print(f"{Fore.RED}✖ Error: Config file '{config_path}' not found.{Style.RESET_ALL}")
             sys.exit(1)
     else:
-        config_path = select_config_file()
+        # Fallback to default.mapping.txt in the current working directory
+        default_file = Path("default.mapping.txt")
+        if default_file.exists():
+            config_path = default_file
+        else:
+            print(
+                f"{Fore.RED}✖ Error: No config file specified and 'default.mapping.txt' was not found.{Style.RESET_ALL}"
+            )
+            print("Usage: midi2osc -c <path/to/mapping.txt>")
+            print("       midi2osc -d / --list-devices (to list available MIDI inputs)")
+            print("       midi2osc --generate-config (to create a starting template)")
+            sys.exit(1)
 
     # Enable color wrapper on stdout
     sys.stdout = ColorStream(sys.stdout)
 
-    # Parse config and start converter
+    # Parse config and run converter
     try:
         config = parse_config(config_path)
 

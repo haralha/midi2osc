@@ -2,13 +2,12 @@
 
 import html
 import os
-import subprocess
 import sys
 import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt, Signal, QObject, QSettings
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,13 +15,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QComboBox,
+    QLineEdit,
     QPushButton,
     QTextEdit,
     QWidget,
+    QFileDialog,
+    QMessageBox,
 )
 
-from config import parse_config, get_available_config_files, get_user_config_dir
+from config import parse_config, EXAMPLE_CONFIG
 from converter import run_converter
 
 
@@ -49,73 +50,61 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(750, 480)
 
         self.current_thread = None
+        self.stop_event = None
+        self.active_config_path = None
 
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Top Bar
+        # Header Title
+        title = QLabel("🎛️ MIDI TO OSC CONVERTER")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-top: 5px;")
+        layout.addWidget(title)
+
+        subtitle = QLabel("High-Performance Bridge for Live Performance")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet("color: #888888; font-size: 11px; margin-bottom: 10px;")
+        layout.addWidget(subtitle)
+
+        # Config Controls
         top_bar = QHBoxLayout()
 
-        config_label = QLabel("Selected Config File:")
+        config_label = QLabel("Config File:")
         config_label.setStyleSheet("color: #aaaaaa; font-size: 12px; font-weight: bold;")
         top_bar.addWidget(config_label)
 
-        self.combo_config = QComboBox()
-        self.combo_config.setStyleSheet("""
-            QComboBox {
+        self.input_config_path = QLineEdit()
+        self.input_config_path.setReadOnly(True)
+        self.input_config_path.setPlaceholderText("No configuration file selected...")
+        self.input_config_path.setStyleSheet("""
+            QLineEdit {
                 background-color: #2a2a2a;
                 color: #ffffff;
                 border: 1px solid #444444;
                 border-radius: 4px;
                 padding: 4px 8px;
                 font-size: 12px;
-                min-width: 200px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #2a2a2a;
-                color: #ffffff;
-                selection-background-color: #3a3a3a;
             }
         """)
-        top_bar.addWidget(self.combo_config)
+        top_bar.addWidget(self.input_config_path)
 
-        self.btn_open_folder = QPushButton("📁 Open Config Folder")
-        self.btn_open_folder.setToolTip("Open directory containing configuration files")
-        self.btn_open_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_open_folder.setStyleSheet("""
-            QPushButton {
-                background-color: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #3a3a3a;
-                border-color: #666666;
-            }
-            QPushButton:pressed { background-color: #1a1a1a; }
-        """)
-        self.btn_open_folder.clicked.connect(self.open_config_folder)
-        top_bar.addWidget(self.btn_open_folder)
+        self.btn_browse = QPushButton("📁 Browse...")
+        self.btn_browse.setToolTip("Select a mapping configuration file")
+        self.btn_browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_browse.setStyleSheet(self._button_style())
+        self.btn_browse.clicked.connect(self.browse_config_file)
+        top_bar.addWidget(self.btn_browse)
 
-        top_bar.addStretch()
+        self.btn_new_template = QPushButton("➕ New Template")
+        self.btn_new_template.setToolTip("Create a new example mapping configuration file")
+        self.btn_new_template.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_template.setStyleSheet(self._button_style())
+        self.btn_new_template.clicked.connect(self.create_new_template)
+        top_bar.addWidget(self.btn_new_template)
+
         layout.addLayout(top_bar)
-
-        # Header Title
-        title = QLabel("🎛️ MIDI TO OSC CONVERTER")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 5px;")
-        layout.addWidget(title)
-
-        subtitle = QLabel("High-Performance Bridge for Live Performance")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #888888; font-size: 11px; margin-bottom: 5px;")
-        layout.addWidget(subtitle)
 
         # Log Area
         self.log_area = QTextEdit()
@@ -139,43 +128,74 @@ class MainWindow(QMainWindow):
         self.stream.text_written.connect(self.append_log_line)
         sys.stdout = self.stream
 
-        self.load_config_list()
-        self.combo_config.currentIndexChanged.connect(self.on_config_selected)
+        # Restore last used config file, or fallback to default.mapping.txt
+        settings = QSettings("midi2osc", "MIDI2OSC")
+        last_path_str = settings.value("last_config_path", "")
 
-        self.start_engine()
+        last_file = Path(last_path_str) if last_path_str else None
+        default_file = Path("default.mapping.txt")
 
-    def load_config_list(self):
-        self.combo_config.blockSignals(True)
-        self.combo_config.clear()
-        try:
-            files = get_available_config_files()
-            for file_path in files:
-                self.combo_config.addItem(file_path.name, userData=file_path)
-        except Exception as e:
-            print(f"✖ Error listing config files: {e}")
-        self.combo_config.blockSignals(False)
+        if last_file and last_file.exists():
+            self.load_config(last_file)
+        elif default_file.exists():
+            self.load_config(default_file)
+        else:
+            print("ℹ Please select a config file using 'Browse...' or create a 'New Template'.")
 
-    def open_config_folder(self):
-        selected_path = self.combo_config.currentData()
-        target_dir = selected_path.parent if selected_path else get_user_config_dir()
-        print(f"📂 Opening folder: {target_dir}")
+    def _button_style(self) -> str:
+        return """
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #ffffff;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #666666;
+            }
+            QPushButton:pressed { background-color: #1a1a1a; }
+        """
 
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["open", str(target_dir)])
-            elif sys.platform == "win32":
-                os.startfile(str(target_dir))
-            else:
-                subprocess.run(["xdg-open", str(target_dir)])
-        except Exception as e:
-            print(f"✖ Failed to open folder: {e}")
+    def browse_config_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Mapping Configuration",
+            "",
+            "Mapping Files (*.mapping.txt);;Text Files (*.txt);;All Files (*)",
+        )
+        if file_path:
+            self.load_config(Path(file_path))
 
-    def on_config_selected(self, index):
-        if index < 0:
-            return
-        selected_path = self.combo_config.itemData(index)
-        print(f"\n🔄 Switching configuration to: {selected_path.name}")
-        self.start_engine(selected_path)
+    def create_new_template(self):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create New Mapping Template",
+            "default.mapping.txt",
+            "Mapping Files (*.mapping.txt);;Text Files (*.txt)",
+        )
+        if file_path:
+            target_path = Path(file_path)
+            try:
+                target_path.write_text(EXAMPLE_CONFIG.strip(), encoding="utf-8")
+                print(f"✔ Created template at: {target_path.name}")
+                self.load_config(target_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to create template: {e}")
+
+    def load_config(self, config_path: Path):
+        self.active_config_path = config_path
+        self.input_config_path.setText(str(config_path.resolve()))
+
+        # Save last used configuration path to persistent settings
+        settings = QSettings("midi2osc", "MIDI2OSC")
+        settings.setValue("last_config_path", str(config_path.resolve()))
+
+        print(f"\n🔄 Loading configuration: {config_path.name}")
+        self.start_engine(config_path)
 
     def append_log_line(self, line_text: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -183,12 +203,18 @@ class MainWindow(QMainWindow):
 
         formatted = safe_text
         if "MIDI IN:" in formatted:
-            formatted = formatted.replace("MIDI IN:", "<span style='color: #4CAF50; font-weight: bold;'>MIDI IN:</span>")
+            formatted = formatted.replace(
+                "MIDI IN:", "<span style='color: #4CAF50; font-weight: bold;'>MIDI IN:</span>"
+            )
         if "MAPPED" in formatted:
-            formatted = formatted.replace("MAPPED", "<span style='color: #00E676; font-weight: bold;'>MAPPED </span>")
+            formatted = formatted.replace(
+                "MAPPED", "<span style='color: #00E676; font-weight: bold;'>MAPPED </span>"
+            )
         if "DEFAULT" in formatted:
-            formatted = formatted.replace("DEFAULT", "<span style='color: #FFB74D;'>DEFAULT</span>")
-        if any(k in formatted for k in ("Listening on MIDI", "Target OSC", "Creating", "Switching", "Opening folder")):
+            formatted = formatted.replace(
+                "DEFAULT", "<span style='color: #FFB74D;'>DEFAULT</span>"
+            )
+        if any(k in formatted for k in ("Listening on MIDI", "Target OSC", "Creating", "Loading", "✔")):
             formatted = f"<span style='color: #29B6F6;'>{formatted}</span>"
         if any(k in formatted for k in ("Error", "Invalid", "✖")):
             formatted = f"<span style='color: #FF5252; font-weight: bold;'>{formatted}</span>"
@@ -201,13 +227,22 @@ class MainWindow(QMainWindow):
         self.log_area.insertHtml(html_line + "<br>")
         self.log_area.ensureCursorVisible()
 
-    def start_engine(self, config_path: Path = None):
-        if config_path is None:
-            config_path = self.combo_config.currentData()
+    def stop_current_engine(self):
+        """Signal the running converter thread to stop cleanly."""
+        if self.stop_event:
+            self.stop_event.set()
+        if self.current_thread and self.current_thread.is_alive():
+            self.current_thread.join(timeout=0.5)
 
-        if not config_path:
-            print("✖ No config file selected or found.")
+    def start_engine(self, config_path: Path):
+        if not config_path or not config_path.exists():
+            print("✖ Invalid or missing config file.")
             return
+
+        # Stop existing background worker first
+        self.stop_current_engine()
+
+        self.stop_event = threading.Event()
 
         def worker():
             try:
@@ -223,12 +258,18 @@ class MainWindow(QMainWindow):
                     config["ip"],
                     config["port"],
                     config["mappings"],
+                    stop_event=self.stop_event,
                 )
             except Exception as e:
                 print(f"✖ Error: {e}")
 
         self.current_thread = threading.Thread(target=worker, daemon=True)
         self.current_thread.start()
+
+    def closeEvent(self, event):
+        """Clean shutdown when closing GUI window."""
+        self.stop_current_engine()
+        event.accept()
 
 
 def main():

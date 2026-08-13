@@ -1,0 +1,14 @@
+# midi2osc Configuration File Example
+# -----------------------------------------------
+# MIDI Port / Device Name
+midi_port = "IAC Driver Bus 1"
+
+# Target OSC Destination
+ip = "127.0.0.1"
+port = 8000
+
+# MIDI to OSC Mappings
+# Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH]
+# Examples:
+# note_on 1 60 -> /trigger/note
+# cc 1 7 -> /volume
