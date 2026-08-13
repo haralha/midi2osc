@@ -43,12 +43,12 @@ python3 -m pipx ensurepath
 
 Directly from GitHub:
 ```bash
-pipx install git+[https://github.com/your-username/midi2osc.git](https://github.com/your-username/midi2osc.git)
+pipx install git+https://github.com/your-username/midi2osc.git
 ```
 
 Or from a local clone:
 ```bash
-git clone [https://github.com/your-username/midi2osc.git](https://github.com/your-username/midi2osc.git)
+git clone https://github.com/haralha/midi2osc.git
 cd midi2osc
 pipx install .
 ```
@@ -72,7 +72,7 @@ To update to the latest version in the future:
 pipx upgrade midi2osc
 ```
 
-Development & Local Execution
+## Development & Local Execution
 If you want to modify the source code or develop locally using Poetry:
 ```bash
 git clone [https://github.com/your-username/midi2osc.git](https://github.com/your-username/midi2osc.git)
