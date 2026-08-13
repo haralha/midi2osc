@@ -7,6 +7,10 @@ midi_port = "IAC Driver Bus 1"
 ip = "127.0.0.1"
 port = 8000
 
+# Convert unmapped/fallback messages? (true/false)
+# If set to false, messages without explicit mappings are only logged to terminal and NOT sent over OSC.
+convert_unmapped = false
+
 # MIDI to OSC Mappings
 # Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH]
 # Examples:

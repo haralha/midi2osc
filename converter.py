@@ -8,12 +8,17 @@ from pythonosc import udp_client
 SUPPORTED_TYPES = {"note_on", "note_off", "control_change", "program_change", "sysex"}
 
 
+class MidiPortError(RuntimeError):
+    """Raised after MIDI port diagnostics have already been printed."""
+
+
 def run_converter(
     port_name: str,
     osc_ip: str,
     osc_port: int,
     mappings: Dict[Tuple[str, Any, Any], str],
     stop_event: Optional[threading.Event] = None,
+    convert_unmapped: bool = True,
 ) -> None:
     """Main loop listening on MIDI port and dispatching OSC messages."""
 
@@ -24,10 +29,15 @@ def run_converter(
 
     clean_port_name = port_name.strip() if port_name else ""
 
+    def _print_available_ports() -> None:
+        print("Available MIDI input ports:")
+        for i, name in enumerate(available_ports):
+            print(f"  [{i}] {name}")
+
     if not clean_port_name:
-        raise RuntimeError(
-            f"No MIDI port specified in configuration. Available ports: {available_ports}"
-        )
+        _print_available_ports()
+        print("✖ Error: No MIDI port specified in configuration.")
+        raise MidiPortError("No MIDI port specified in configuration.")
 
     target_port = None
 
@@ -39,9 +49,9 @@ def run_converter(
             target_port = matched[0]
             print(f"✔ Connected to MIDI Port: '{target_port}' (matched from '{clean_port_name}')")
         else:
-            raise RuntimeError(
-                f"MIDI Port '{clean_port_name}' not found. Available ports: {available_ports}"
-            )
+            _print_available_ports()
+            print(f"✖ Error: MIDI Port '{clean_port_name}' not found.")
+            raise MidiPortError(f"MIDI Port '{clean_port_name}' not found.")
 
     client = udp_client.SimpleUDPClient(osc_ip, osc_port)
 
@@ -110,7 +120,6 @@ def run_converter(
                         f"MIDI IN: {midi_sig:<12} ➔ MAPPED  -> {osc_addr} [{val_str}]"
                     )
                 else:
-                    osc_addr = default_addr
                     send_val = default_val
                     val_str = (
                         " ".join(map(str, send_val))
@@ -118,7 +127,13 @@ def run_converter(
                         else str(send_val)
                     )
 
-                    client.send_message(osc_addr, send_val)
-                    print(
-                        f"MIDI IN: {midi_sig:<12} ➔ DEFAULT -> {osc_addr} [{val_str}]"
-                    )
+                    if convert_unmapped:
+                        client.send_message(default_addr, send_val)
+                        print(
+                            f"MIDI IN: {midi_sig:<12} ➔ DEFAULT -> {default_addr} [{val_str}]"
+                        )
+                    else:
+                        print(
+                            f"MIDI IN: {midi_sig:<12} ➔ UNMAPPED (LOGGED ONLY) [{val_str}]"
+                        )
+                        

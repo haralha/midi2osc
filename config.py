@@ -11,6 +11,10 @@ midi_port = "Network Session 1"
 ip = "127.0.0.1"
 port = 8000
 
+# Convert unmapped/fallback messages? (true/false)
+# If set to false, messages without explicit mappings are only logged to terminal and NOT sent over OSC.
+convert_unmapped = true
+
 # MIDI to OSC Mappings
 # Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH]
 # Examples:
@@ -25,6 +29,7 @@ def parse_config(config_path: Path) -> dict:
         "ip": "127.0.0.1",
         "port": 7700,
         "midi_port": "",
+        "convert_unmapped": True,
         "mappings": {},
     }
 
@@ -55,6 +60,8 @@ def parse_config(config_path: Path) -> dict:
                         print(f"Invalid PORT value in config: {line}")
                 elif key in ("midi_port", "midi_device", "midi"):
                     config["midi_port"] = val
+                elif key in ("convert_unmapped", "convert_all", "passthrough"):
+                    config["convert_unmapped"] = val.lower() in ("true", "1", "yes", "on")
 
             # Parse mapping lines
             elif "->" in line:

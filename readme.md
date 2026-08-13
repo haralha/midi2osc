@@ -39,7 +39,7 @@ python3 -m pipx ensurepath
 ```
 (Restart your terminal after running ensurepath)
 
-1. Install midi2osc
+#### 2. Install midi2osc
 
 Directly from GitHub:
 ```bash
@@ -53,7 +53,7 @@ cd midi2osc
 pipx install .
 ```
 
-1. Usage via pipx
+### 3. Usage via pipx
 
 Once installed, you can launch the app directly from any terminal window:
 
@@ -90,7 +90,7 @@ Run CLI:
 poetry run poe cli
 ```
 
-Configuration (*.mapping.txt)
+## Configuration (*.mapping.txt)
 Any *.mapping.txt file next to the app is treated as a preset. If none exist at startup, default.mapping.txt is created automatically. A legacy mapping.txt is also recognized.
 
 Example
@@ -114,7 +114,7 @@ PORT: Target OSC UDP port (default: 7700)
 MIDI_PORT: Exact MIDI input device name. If empty or missing, an interactive menu is shown at startup
 Mappings: note or cc, then channel, note/CC number, ->, and the OSC address
 
-Building Executables (Standalone Packaging)
+## Building Executables (Standalone Packaging)
 Standalone binaries can be compiled locally or via GitHub Actions using PyInstaller and poethepoet:
 
 ```bash

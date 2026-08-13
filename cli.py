@@ -7,7 +7,7 @@ import mido
 from colorama import init, Fore, Style
 
 from config import parse_config
-from converter import run_converter
+from converter import run_converter, MidiPortError
 
 # Initialize colorama (ensures ANSI color codes work on Windows, macOS, and Linux)
 init(autoreset=True)
@@ -173,6 +173,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}Stopping MIDI to OSC Converter. Goodbye!{Style.RESET_ALL}")
         sys.exit(0)
+    except MidiPortError:
+        # Error and available ports already printed by run_converter
+        sys.exit(1)
     except Exception as e:
         print(f"✖ Error: {e}")
         sys.exit(1)
