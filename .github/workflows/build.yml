@@ -28,20 +28,22 @@ jobs:
           - os: ubuntu-latest
             artifact_name: midi2osc-linux
             is_mac: false
-            target_arch: native
+            target_arch: x86_64
           - os: windows-latest
             artifact_name: midi2osc-windows
             is_mac: false
-            target_arch: native
+            target_arch: x86_64
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # Her spesifiserer vi arkitekturen basert på matrisen!
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: ${{ matrix.target_arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install Poetry
         run: pipx install poetry
@@ -49,20 +51,19 @@ jobs:
       - name: Install project dependencies
         run: poetry install --no-root
 
-      # Build for macOS ARM64 (Apple Silicon)
+      # Build for macOS ARM64
       - name: Build executable (macOS ARM64)
         if: matrix.is_mac == true && matrix.target_arch == 'arm64'
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: poetry run poe build-mac
 
-      # Build for macOS x86_64 (Intel - macOS 10.15+)
+      # Build for macOS Intel x86_64
       - name: Build executable (macOS Intel x86_64)
         if: matrix.is_mac == true && matrix.target_arch == 'x86_64'
         env:
           MACOSX_DEPLOYMENT_TARGET: "10.15"
-          ARCHFLAGS: "-arch x86_64"
-        run: arch -x86_64 poetry run poe build-mac
+        run: poetry run poe build-mac
 
       # Build for Windows / Linux
       - name: Build executable (Windows / Linux)
