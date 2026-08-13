@@ -41,7 +41,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           architecture: ${{ matrix.target_arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install Poetry
@@ -57,11 +57,11 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: poetry run poe build-mac
 
-      # Build for macOS Intel x86_64 (støtter macOS 10.15 Catalina og nyere)
+      # Build for macOS Intel x86_64
       - name: Build executable (macOS Intel x86_64)
         if: matrix.is_mac == true && matrix.target_arch == 'x86_64'
         env:
-          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: poetry run poe build-mac
 
       # Build for Windows / Linux
