@@ -35,16 +35,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Oppgradert til Poetry 2.0.1 for å støtte PEP 621 ([project])-formatet i pyproject.toml
       - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 2.0.1
-          virtualenvs-create: true
-          virtualenvs-in-project: true
+        run: pipx install poetry
 
       - name: Install project dependencies
-        run: poetry install
+        run: poetry install --no-root
 
       - name: Build executable
         run: poetry run poe build
