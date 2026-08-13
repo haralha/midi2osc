@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+import platformdirs
 
 DEFAULT_TXT_CONFIG = """# --- NETWORK SETTINGS ---
 IP: 192.168.86.36
@@ -16,6 +17,18 @@ cc 0 7    -> /composition/master/volume
 """
 
 
+def get_user_config_dir() -> Path:
+    """Return standard user config directory based on OS, and ensure it exists.
+    
+    - macOS: ~/Library/Application Support/midi2osc/
+    - Windows: C:\\Users\\<user>\\AppData\\Roaming\\midi2osc\\
+    - Linux: ~/.config/midi2osc/
+    """
+    config_dir = Path(platformdirs.user_config_dir("midi2osc", appauthor=False))
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
 def get_app_dir() -> Path:
     """Find the root directory where the executable or main script is located."""
     if getattr(sys, "frozen", False):
@@ -27,24 +40,39 @@ def get_app_dir() -> Path:
     return Path(__file__).parent
 
 
+def get_available_config_files() -> list[Path]:
+    """Search for config files in BOTH local app directory and OS config directory."""
+    config_files: list[Path] = []
+    
+    # Sjekk både lokal mappe og OS-brukermappe
+    search_dirs = [get_app_dir(), get_user_config_dir()]
+
+    for d in search_dirs:
+        for f in sorted(list(d.glob("*.mapping.txt"))):
+            if f not in config_files:
+                config_files.append(f)
+                
+        legacy = d / "mapping.txt"
+        if legacy.exists() and legacy not in config_files:
+            config_files.append(legacy)
+
+    return config_files
+
+
 def select_config_file() -> Path:
     """Search for *.mapping.txt files and return the active one."""
-    app_dir = get_app_dir()
-    config_files = sorted(list(app_dir.glob("*.mapping.txt")))
-    legacy_config = app_dir / "mapping.txt"
+    config_files = get_available_config_files()
 
-    if legacy_config.exists() and legacy_config not in config_files:
-        config_files.append(legacy_config)
-
-    # 1. If no config files exist, create 'default.mapping.txt'
+    # 1. If no config files exist, create 'default.mapping.txt' in User Config Dir
     if not config_files:
-        default_file = app_dir / "default.mapping.txt"
-        print(f"No config files found. Creating '{default_file.name}'...")
+        user_dir = get_user_config_dir()
+        default_file = user_dir / "default.mapping.txt"
+        print(f"No config files found. Creating '{default_file.name}' in {user_dir}...")
         with open(default_file, "w", encoding="utf-8") as f:
             f.write(DEFAULT_TXT_CONFIG)
         return default_file
 
-    # 2. Return first found config file automatically in GUI context
+    # 2. Return first found config file
     print(f"Loading active config: {config_files[0].name}")
     return config_files[0]
 

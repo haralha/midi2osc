@@ -1,18 +1,26 @@
+import html
+import os
+import subprocess
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
+    QComboBox,
+    QPushButton,
     QTextEdit,
     QWidget,
 )
 
-from config import select_config_file, parse_config
+from config import parse_config, get_available_config_files, get_user_config_dir
 from converter import run_converter
 
 
@@ -22,7 +30,6 @@ class SignalStream(QObject):
     text_written = Signal(str)
 
     def write(self, text):
-        # Only send if there is actual content (ignore empty newlines)
         if text.strip():
             self.text_written.emit(text.strip())
 
@@ -36,15 +43,79 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("MIDI to OSC Converter")
-        self.resize(680, 450)
-        self.setMinimumSize(680, 450)
+        self.resize(750, 480)
+        self.setMinimumSize(750, 480)
+
+        # Track running engine thread
+        self.current_thread = None
 
         # Main layout
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Header
+        # --- TOP BAR: File selector & Open Folder Button (Top Left) ---
+        top_bar = QHBoxLayout()
+
+        config_label = QLabel("Selected Config File:")
+        config_label.setStyleSheet(
+            "color: #aaaaaa; font-size: 12px; font-weight: bold;"
+        )
+        top_bar.addWidget(config_label)
+
+        # Dropdown menu
+        self.combo_config = QComboBox()
+        self.combo_config.setStyleSheet("""
+            QComboBox {
+                background-color: #2a2a2a;
+                color: #ffffff;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-width: 200px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: #ffffff;
+                selection-background-color: #3a3a3a;
+            }
+        """)
+        top_bar.addWidget(self.combo_config)
+
+        # Open Folder Button (Ikon + Tekst)
+        self.btn_open_folder = QPushButton("📁 Open Config Folder")
+        self.btn_open_folder.setToolTip("Open directory containing configuration files")
+        self.btn_open_folder.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open_folder.setStyleSheet("""
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #ffffff;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #666666;
+            }
+            QPushButton:pressed {
+                background-color: #1a1a1a;
+            }
+        """)
+        self.btn_open_folder.clicked.connect(self.open_config_folder)
+        top_bar.addWidget(self.btn_open_folder)
+
+        top_bar.addStretch()  # Pushes controls to the left
+
+        layout.addLayout(top_bar)
+
+        # Header Title
         title = QLabel("🎛️ MIDI TO OSC CONVERTER")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 5px;")
@@ -58,11 +129,9 @@ class MainWindow(QMainWindow):
         # Dark console/terminal text box
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-
-        # Limit log to a maximum of 1000 lines for stability and low memory usage
         self.log_area.document().setMaximumBlockCount(1000)
 
-        # Uses native macOS monospace fonts and removes inner padding
+        # Uses native macOS monospace fonts
         self.log_area.setStyleSheet("""
             QTextEdit {
                 background-color: #121212;
@@ -81,15 +150,64 @@ class MainWindow(QMainWindow):
         self.stream.text_written.connect(self.append_log_line)
         sys.stdout = self.stream
 
-        # Start the engine
+        # Populate available config files and connect change event
+        self.load_config_list()
+        self.combo_config.currentIndexChanged.connect(self.on_config_selected)
+
+        # Start initial converter engine
         self.start_engine()
 
+    def load_config_list(self):
+        """Finds all config files and fills the dropdown menu."""
+        self.combo_config.blockSignals(True)
+        self.combo_config.clear()
+
+        try:
+            files = get_available_config_files()
+            for file_path in files:
+                self.combo_config.addItem(file_path.name, userData=file_path)
+        except Exception as e:
+            print(f"✖ Error listing config files: {e}")
+
+        self.combo_config.blockSignals(False)
+
+    def open_config_folder(self):
+        """Opens the folder of the currently selected file or the default config directory."""
+        selected_path = self.combo_config.currentData()
+
+        # Target directory to open
+        target_dir = selected_path.parent if selected_path else get_user_config_dir()
+
+        print(f"📂 Opening folder: {target_dir}")
+
+        try:
+            if sys.platform == "darwin":  # macOS
+                subprocess.run(["open", str(target_dir)])
+            elif sys.platform == "win32":  # Windows
+                os.startfile(str(target_dir))
+            else:  # Linux
+                subprocess.run(["xdg-open", str(target_dir)])
+        except Exception as e:
+            print(f"✖ Failed to open folder: {e}")
+
+    def on_config_selected(self, index):
+        """Triggers when user selects a different file in dropdown."""
+        if index < 0:
+            return
+
+        selected_path = self.combo_config.itemData(index)
+        print(f"\n🔄 Switching configuration to: {selected_path.name}")
+        self.start_engine(selected_path)
+
     def append_log_line(self, line_text: str):
-        """Formats the text as raw terminal HTML without extra spacing."""
+        """Formats text as raw terminal HTML safely without dropping path characters."""
         timestamp = datetime.now().strftime("%H:%M:%S")
 
-        # Colorize keywords if present in the string
-        formatted = line_text
+        # Escape special characters so file paths/angle brackets aren't eaten by Qt's HTML parser
+        safe_text = html.escape(line_text)
+
+        # Colorize keywords
+        formatted = safe_text
         if "MIDI IN:" in formatted:
             formatted = formatted.replace(
                 "MIDI IN:",
@@ -104,30 +222,43 @@ class MainWindow(QMainWindow):
             formatted = formatted.replace(
                 "DEFAULT", "<span style='color: #FFB74D;'>DEFAULT</span>"
             )
-        if "Listening on MIDI" in formatted or "Target OSC" in formatted:
+        if (
+            "Listening on MIDI" in formatted
+            or "Target OSC" in formatted
+            or "Creating" in formatted
+            or "Switching" in formatted
+            or "Opening folder" in formatted
+        ):
             formatted = f"<span style='color: #29B6F6;'>{formatted}</span>"
-        if "Error" in formatted or "Invalid" in formatted:
+        if "Error" in formatted or "Invalid" in formatted or "✖" in formatted:
             formatted = (
                 f"<span style='color: #FF5252; font-weight: bold;'>{formatted}</span>"
             )
 
-        # Construct final HTML line with timestamp
         html_line = f"<span style='color: #555555;'>[{timestamp}]</span> {formatted}"
 
-        # Insert directly at the bottom of the console without extra line breaks
         cursor = self.log_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.log_area.setTextCursor(cursor)
         self.log_area.insertHtml(html_line + "<br>")
         self.log_area.ensureCursorVisible()
 
-    def start_engine(self):
+    def start_engine(self, config_path: Path = None):
+        """Starts or restarts the conversion worker thread."""
+
+        # Determine file to load
+        if config_path is None:
+            config_path = self.combo_config.currentData()
+
+        if not config_path:
+            print("✖ No config file selected or found.")
+            return
+
         def worker():
             try:
-                selected_file = select_config_file()
-                config = parse_config(selected_file)
+                config = parse_config(config_path)
 
-                print(f"✔ Active config: {selected_file.name}")
+                print(f"✔ Active config: {config_path.name}")
                 print(f"Listening on MIDI: '{config['midi_port']}'")
                 print(f"Target OSC: {config['ip']}:{config['port']}")
                 print("Waiting for incoming MIDI events...")
@@ -141,11 +272,27 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"✖ Error: {e}")
 
-        threading.Thread(target=worker, daemon=True).start()
+        # Start thread
+        self.current_thread = threading.Thread(target=worker, daemon=True)
+        self.current_thread.start()
 
 
 def main():
     app = QApplication(sys.argv)
+
+    # Set process name for macOS menu bar
+    app.setApplicationName("MIDI2OSC")
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSBundle
+
+            bundle = NSBundle.mainBundle()
+            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            if info is not None:
+                info["CFBundleName"] = "MIDI2OSC"
+        except ImportError:
+            pass
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
