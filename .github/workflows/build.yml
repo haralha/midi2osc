@@ -20,7 +20,7 @@ jobs:
           - os: macos-latest
             artifact_name: midi2osc-macos-arm64
             is_mac: true
-          - os: macos-14
+          - os: macos-13
             artifact_name: midi2osc-macos-x86_64
             is_mac: true
           - os: ubuntu-latest
@@ -47,6 +47,8 @@ jobs:
 
       - name: Build executable (macOS)
         if: matrix.is_mac == true
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
         run: poetry run poe build-mac
 
       - name: Build executable (Windows / Linux)
