@@ -68,17 +68,6 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: poetry run poe build-mac
 
-      # Build for macOS Intel x86_64 (Catalina 10.15)
-      - name: Build executable (macOS Intel x86_64)
-        if: matrix.is_mac == true && matrix.target_arch == 'x86_64'
-        run: |
-          curl -L -o MacOSX10.15.sdk.tar.xz "https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.15.sdk.tar.xz"
-          mkdir -p $HOME/sdks
-          tar -xJ -f MacOSX10.15.sdk.tar.xz -C $HOME/sdks
-          export MACOSX_DEPLOYMENT_TARGET="10.15"
-          export SDKROOT="$HOME/sdks/MacOSX10.15.sdk"
-          poetry run poe build-mac
-
       # Build for Windows / Linux
       - name: Build executable (Windows / Linux)
         if: matrix.is_mac == false
