@@ -5,7 +5,7 @@ description = "Converts incoming MIDI events to OSC commands"
 authors = [
 ]
 readme = "readme.md"
-requires-python = ">=3.12,<3.15"
+python = ">=3.10,<3.15"
 dependencies = [
     "mido (>=1.3.3,<2.0.0)",
     "python-rtmidi (>=1.5.8,<2.0.0)",
