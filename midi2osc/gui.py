@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 import os
 import subprocess
@@ -13,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QSettings, QTimer
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -22,7 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QTextEdit,
+    QPlainTextEdit,
     QWidget,
     QFileDialog,
     QMessageBox,
@@ -35,8 +34,33 @@ from midi2osc.logging_utils import setup_logging
 logger = logging.getLogger("midi2osc")
 
 LOG_FLUSH_MS = 50
+LOG_BUFFER_MAX = 500
+LOG_FLUSH_MAX_LINES = 80
+LOG_MIDI_MAX_PER_FLUSH = 25
+LOG_MAX_BLOCKS = 1000
 ENGINE_JOIN_TIMEOUT_S = 2.0
 ENGINE_REOPEN_PAUSE_S = 0.15
+
+_STATUS_KEYS = (
+    "Listening on MIDI",
+    "Target OSC",
+    "Active config",
+    "Loading",
+    "Opened",
+    "Created",
+    "Convert unmapped",
+    "Mappings loaded",
+    "Reloading",
+)
+_ERROR_KEYS = ("Error", "Invalid", "✖", "failed", "lost")
+
+
+def _char_format(color: str, *, bold: bool = False) -> QTextCharFormat:
+    fmt = QTextCharFormat()
+    fmt.setForeground(QColor(color))
+    if bold:
+        fmt.setFontWeight(QFont.Weight.Bold)
+    return fmt
 
 
 class QtLogEmitter(QObject):
@@ -71,7 +95,17 @@ class MainWindow(QMainWindow):
         self.current_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self.active_config_path: Path | None = None
-        self._log_buffer: deque[str] = deque()
+        self._log_buffer: deque[str] = deque(maxlen=LOG_BUFFER_MAX)
+        self._midi_log_pending = 0
+        self._midi_log_dropped = 0
+        self._fmt_time = _char_format("#555555")
+        self._fmt_body = _char_format("#e0e0e0")
+        self._fmt_midi_in = _char_format("#4CAF50", bold=True)
+        self._fmt_mapped = _char_format("#00E676", bold=True)
+        self._fmt_unmapped = _char_format("#888888", bold=True)
+        self._fmt_default = _char_format("#FFB74D")
+        self._fmt_info = _char_format("#29B6F6")
+        self._fmt_error = _char_format("#FF5252", bold=True)
 
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
@@ -149,12 +183,13 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.input_config_path)
 
-        self.log_area = QTextEdit()
+        self.log_area = QPlainTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.document().setMaximumBlockCount(1000)
+        self.log_area.setUndoRedoEnabled(False)
+        self.log_area.setMaximumBlockCount(LOG_MAX_BLOCKS)
         self.log_area.setStyleSheet(
             """
-            QTextEdit {
+            QPlainTextEdit {
                 background-color: #121212;
                 color: #e0e0e0;
                 font-family: "Menlo", "Monaco", "Courier New", monospace;
@@ -289,68 +324,73 @@ class MainWindow(QMainWindow):
         self.start_engine(config_path)
 
     def _enqueue_log_line(self, line_text: str) -> None:
+        if "MIDI IN:" in line_text:
+            self._midi_log_pending += 1
+            if self._midi_log_pending > LOG_MIDI_MAX_PER_FLUSH:
+                self._midi_log_dropped += 1
+                return
         self._log_buffer.append(line_text)
 
     def _flush_log_buffer(self) -> None:
+        dropped = self._midi_log_dropped
+        self._midi_log_dropped = 0
+        self._midi_log_pending = 0
+        if dropped:
+            self._log_buffer.append(f"… dropped {dropped} MIDI log lines")
+
         if not self._log_buffer:
             return
 
-        chunks: list[str] = []
-        while self._log_buffer:
-            chunks.append(self._format_log_line(self._log_buffer.popleft()))
-
         cursor = self.log_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_area.setUpdatesEnabled(False)
+        try:
+            flushed = 0
+            while self._log_buffer and flushed < LOG_FLUSH_MAX_LINES:
+                self._insert_log_line(cursor, self._log_buffer.popleft())
+                flushed += 1
+        finally:
+            self.log_area.setUpdatesEnabled(True)
         self.log_area.setTextCursor(cursor)
-        self.log_area.insertHtml("".join(chunks))
         self.log_area.ensureCursorVisible()
 
-    def _format_log_line(self, line_text: str) -> str:
+    def _insert_log_line(self, cursor: QTextCursor, line_text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        safe_text = html.escape(line_text)
+        cursor.insertText(f"[{timestamp}] ", self._fmt_time)
 
-        formatted = safe_text
-        if "MIDI IN:" in formatted:
-            formatted = formatted.replace(
-                "MIDI IN:",
-                "<span style='color: #4CAF50; font-weight: bold;'>MIDI IN:</span>",
-            )
-        if "UNMAPPED" in formatted:
-            formatted = formatted.replace(
-                "UNMAPPED",
-                "<span style='color: #888888; font-weight: bold;'>UNMAPPED</span>",
-            )
-        elif "MAPPED" in formatted:
-            formatted = formatted.replace(
-                "MAPPED",
-                "<span style='color: #00E676; font-weight: bold;'>MAPPED</span>",
-            )
-        if "DEFAULT" in formatted:
-            formatted = formatted.replace(
-                "DEFAULT",
-                "<span style='color: #FFB74D;'>DEFAULT</span>",
-            )
-        if any(
-            k in formatted
-            for k in (
-                "Listening on MIDI",
-                "Target OSC",
-                "Active config",
-                "Loading",
-                "Opened",
-                "Created",
-                "Convert unmapped",
-                "Mappings loaded",
-                "Reloading",
-            )
-        ):
-            formatted = f"<span style='color: #29B6F6;'>{formatted}</span>"
-        if any(k in formatted for k in ("Error", "Invalid", "✖", "failed", "lost")):
-            formatted = (
-                f"<span style='color: #FF5252; font-weight: bold;'>{formatted}</span>"
-            )
+        if any(k in line_text for k in _ERROR_KEYS):
+            base = self._fmt_error
+        elif any(k in line_text for k in _STATUS_KEYS):
+            base = self._fmt_info
+        else:
+            base = self._fmt_body
 
-        return f"<span style='color: #555555;'>[{timestamp}]</span> {formatted}<br>"
+        remaining = line_text
+        if "MIDI IN:" in remaining:
+            before, _, remaining = remaining.partition("MIDI IN:")
+            if before:
+                cursor.insertText(before, base)
+            cursor.insertText("MIDI IN:", self._fmt_midi_in)
+
+        token_fmt = None
+        token = None
+        if "UNMAPPED" in remaining:
+            token, token_fmt = "UNMAPPED", self._fmt_unmapped
+        elif "MAPPED" in remaining:
+            token, token_fmt = "MAPPED", self._fmt_mapped
+        if token is not None and token_fmt is not None:
+            before, _, remaining = remaining.partition(token)
+            if before:
+                cursor.insertText(before, base)
+            cursor.insertText(token, token_fmt)
+
+        if "DEFAULT" in remaining:
+            before, _, remaining = remaining.partition("DEFAULT")
+            if before:
+                cursor.insertText(before, base)
+            cursor.insertText("DEFAULT", self._fmt_default)
+
+        cursor.insertText(remaining + "\n", base)
 
     def stop_current_engine(self) -> None:
         """Signal the running converter thread to stop cleanly."""

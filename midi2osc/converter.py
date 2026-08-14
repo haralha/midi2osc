@@ -18,8 +18,8 @@ logger = logging.getLogger("midi2osc")
 
 SUPPORTED_TYPES = {"note_on", "note_off", "control_change", "program_change", "sysex"}
 
-# Idle poll interval — avoids busy-waiting while remaining responsive to stop_event.
-IDLE_WAIT_S = 0.001
+# How often to verify the MIDI device is still present while the callback is active.
+PORT_CHECK_S = 1.0
 RECONNECT_WAIT_S = 1.0
 
 
@@ -205,12 +205,44 @@ def _should_stop(stop_event: Optional[threading.Event]) -> bool:
     return stop_event is not None and stop_event.is_set()
 
 
-def _wait_idle(stop_event: Optional[threading.Event], timeout: float = IDLE_WAIT_S) -> bool:
-    """Wait briefly for stop or timeout. Returns True if stop was requested."""
+def _wait_idle(stop_event: Optional[threading.Event], timeout: float) -> bool:
+    """Wait for stop or timeout. Returns True if stop was requested."""
     if stop_event is None:
         time.sleep(timeout)
         return False
     return stop_event.wait(timeout)
+
+
+def _dispatch_message(
+    msg: Any,
+    mappings: dict[MappingKey, str],
+    convert_unmapped: bool,
+    client: Any,
+    osc_errors: list[int],
+) -> None:
+    routed = route_midi_message(msg, mappings, convert_unmapped)
+    if routed is None:
+        return
+
+    if routed.send:
+        try:
+            client.send_message(routed.osc_address, routed.value)
+        except OSError as exc:
+            osc_errors[0] += 1
+            if osc_errors[0] == 1 or osc_errors[0] % 50 == 0:
+                logger.error(
+                    "OSC send failed (%s errors): %s",
+                    osc_errors[0],
+                    exc,
+                )
+
+    _log_routed(routed)
+
+
+def _open_mido_input(
+    name: str, callback: Optional[Callable[[Any], None]] = None
+) -> Any:
+    return mido.open_input(name, callback=callback)
 
 
 def run_converter(
@@ -223,9 +255,14 @@ def run_converter(
     *,
     reconnect: bool = True,
     client_factory: Optional[Callable[[str, int], Any]] = None,
-    open_input: Optional[Callable[[str], Any]] = None,
+    open_input: Optional[Callable[..., Any]] = None,
+    list_inputs: Optional[Callable[[], list[str]]] = None,
 ) -> None:
     """Listen on a MIDI port and dispatch OSC messages.
+
+    Incoming MIDI is handled via the backend callback (no poll/sleep loop).
+    The converter thread blocks until ``stop_event`` is set, and periodically
+    checks that the device is still present so dropped ports can reconnect.
 
     When ``reconnect`` is True (default), dropped devices are retried until
     ``stop_event`` is set. Raises ``MidiPortError`` if the port cannot be
@@ -234,14 +271,17 @@ def run_converter(
     make_client = client_factory or (
         lambda ip, port: udp_client.SimpleUDPClient(ip, port)
     )
-    open_port = open_input or (lambda name: mido.open_input(name))
+    open_port = open_input or _open_mido_input
+    get_names = list_inputs or (
+        lambda: list(mido.get_input_names())  # type: ignore[attr-defined]
+    )
 
     client = make_client(osc_ip, osc_port)
-    osc_errors = 0
+    osc_errors = [0]
 
     while not _should_stop(stop_event):
         try:
-            target_port = resolve_midi_port(port_name)
+            target_port = resolve_midi_port(port_name, available_ports=get_names())
         except MidiPortError as exc:
             if not reconnect:
                 raise
@@ -254,37 +294,19 @@ def run_converter(
                 return
             continue
 
+        def on_midi(msg: Any) -> None:
+            if _should_stop(stop_event):
+                return
+            _dispatch_message(msg, mappings, convert_unmapped, client, osc_errors)
+
         try:
-            with open_port(target_port) as inport:
+            with open_port(target_port, callback=on_midi):
                 logger.info("Listening on MIDI: '%s'", target_port)
                 while not _should_stop(stop_event):
-                    pending = list(inport.iter_pending())
-                    if not pending:
-                        if _wait_idle(stop_event):
-                            return
-                        continue
-
-                    for msg in pending:
-                        if _should_stop(stop_event):
-                            return
-
-                        routed = route_midi_message(msg, mappings, convert_unmapped)
-                        if routed is None:
-                            continue
-
-                        if routed.send:
-                            try:
-                                client.send_message(routed.osc_address, routed.value)
-                            except OSError as exc:
-                                osc_errors += 1
-                                if osc_errors == 1 or osc_errors % 50 == 0:
-                                    logger.error(
-                                        "OSC send failed (%s errors): %s",
-                                        osc_errors,
-                                        exc,
-                                    )
-
-                        _log_routed(routed)
+                    if _wait_idle(stop_event, PORT_CHECK_S):
+                        return
+                    if target_port not in get_names():
+                        raise RuntimeError(f"MIDI port '{target_port}' disconnected")
 
         except MidiPortError:
             raise

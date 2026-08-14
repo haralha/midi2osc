@@ -1,10 +1,13 @@
 """Unit tests for MIDI routing and port resolution."""
 
+import threading
+import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from midi2osc.converter import MidiPortError, resolve_midi_port, route_midi_message
+from midi2osc.converter import MidiPortError, resolve_midi_port, route_midi_message, run_converter
 
 
 def test_note_on_velocity_zero_becomes_note_off_default() -> None:
@@ -74,3 +77,103 @@ def test_resolve_ambiguous_substring() -> None:
 def test_resolve_missing() -> None:
     with pytest.raises(MidiPortError, match="not found"):
         resolve_midi_port("Nope", ["Other"])
+
+
+class _FakeMidiPort:
+    def __init__(self, callback=None) -> None:
+        self.callback = callback
+        self.closed = False
+
+    def __enter__(self) -> "_FakeMidiPort":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.closed = True
+        self.callback = None
+
+
+def _start_converter(**kwargs):
+    stop = kwargs.pop("stop_event", None) or threading.Event()
+    thread = threading.Thread(
+        target=run_converter,
+        kwargs={"stop_event": stop, **kwargs},
+        daemon=True,
+    )
+    thread.start()
+    return stop, thread
+
+
+def test_midi_callback_sends_osc(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    client = MagicMock()
+    opened: dict[str, _FakeMidiPort] = {}
+
+    def open_input(name: str, callback=None) -> _FakeMidiPort:
+        port = _FakeMidiPort(callback=callback)
+        opened["port"] = port
+        return port
+
+    stop, thread = _start_converter(
+        port_name="IAC",
+        osc_ip="127.0.0.1",
+        osc_port=8000,
+        mappings={("note_on", 0, 60): "/clip/start"},
+        reconnect=False,
+        client_factory=lambda ip, port: client,
+        open_input=open_input,
+        list_inputs=lambda: ["IAC"],
+    )
+    try:
+        deadline = time.monotonic() + 2.0
+        while "port" not in opened and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "port" in opened
+        opened["port"].callback(
+            SimpleNamespace(type="note_on", channel=0, note=60, velocity=100)
+        )
+        client.send_message.assert_called_once_with("/clip/start", 100)
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+
+
+def test_callback_reconnects_when_port_disappears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.RECONNECT_WAIT_S", 0.05)
+    opens = 0
+    disconnected = False
+
+    def open_input(name: str, callback=None) -> _FakeMidiPort:
+        nonlocal opens
+        opens += 1
+        return _FakeMidiPort(callback=callback)
+
+    def list_inputs() -> list[str]:
+        nonlocal disconnected
+        if opens == 1 and not disconnected:
+            disconnected = True
+            return []
+        return ["IAC"]
+
+    stop, thread = _start_converter(
+        port_name="IAC",
+        osc_ip="127.0.0.1",
+        osc_port=8000,
+        mappings={},
+        reconnect=True,
+        client_factory=lambda ip, port: MagicMock(),
+        open_input=open_input,
+        list_inputs=list_inputs,
+    )
+    try:
+        deadline = time.monotonic() + 2.0
+        while opens < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert opens >= 2
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
