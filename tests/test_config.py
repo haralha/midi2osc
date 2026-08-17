@@ -15,9 +15,9 @@ midi_port = "IAC Driver Bus 1"
 convert_unmapped = false
 virtual = true
 
-note 0 60 -> /clip/1
-cc 0 7 -> /volume
-pc 1 3 -> /program
+note 1 60 -> /clip/1
+cc 1 7 -> /volume
+pc 2 3 -> /program
 sysex -> /midi/sysex
 """,
         encoding="utf-8",
@@ -29,6 +29,7 @@ sysex -> /midi/sysex
     assert cfg.midi_port == "IAC Driver Bus 1"
     assert cfg.convert_unmapped is False
     assert cfg.virtual is True
+    # Config channels are 1-16; stored 0-based to match mido
     assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/1")
     assert cfg.mappings[("control_change", 0, 7)] == OscMapping("/volume")
     assert cfg.mappings[("program_change", 1, 3)] == OscMapping("/program")
@@ -39,10 +40,10 @@ def test_parse_value_expressions(tmp_path: Path) -> None:
     path = tmp_path / "expr.mapping.txt"
     path.write_text(
         """
-cc 0 7 -> /composition/master/volume v/127
-cc 0 10 -> /light/brightness 1 - (v/127)
-note 0 60 -> /clip/connect 1
-pc 0 1 -> /qlab/cue/start "cue_{v}"
+cc 1 7 -> /composition/master/volume v/127
+cc 1 10 -> /light/brightness 1 - (v/127)
+note 1 60 -> /clip/connect 1
+pc 1 1 -> /qlab/cue/start "cue_{v}"
 """,
         encoding="utf-8",
     )
@@ -61,7 +62,7 @@ pc 0 1 -> /qlab/cue/start "cue_{v}"
 
 def test_rejects_invalid_value_expression(tmp_path: Path) -> None:
     path = tmp_path / "bad-expr.mapping.txt"
-    path.write_text("cc 0 7 -> /volume __import__('os')\n", encoding="utf-8")
+    path.write_text("cc 1 7 -> /volume __import__('os')\n", encoding="utf-8")
     cfg = parse_config(path)
     assert cfg.mappings == {}
 
@@ -83,9 +84,9 @@ osc_port: 7700
 midi: Device A
 
 --- MAPPINGS ---
-note_on 2 10 -> /a
-control 2 11 -> /b
-program 2 12 -> /c
+note_on 3 10 -> /a
+control 3 11 -> /b
+program 3 12 -> /c
 """,
         encoding="utf-8",
     )
@@ -100,9 +101,19 @@ program 2 12 -> /c
 
 def test_rejects_out_of_range_channel(tmp_path: Path) -> None:
     path = tmp_path / "bad.mapping.txt"
-    path.write_text("note 16 60 -> /x\n", encoding="utf-8")
+    path.write_text(
+        "note 0 60 -> /x\nnote 17 60 -> /y\n",
+        encoding="utf-8",
+    )
     cfg = parse_config(path)
     assert cfg.mappings == {}
+
+
+def test_accepts_channel_16(tmp_path: Path) -> None:
+    path = tmp_path / "ch16.mapping.txt"
+    path.write_text("cc 16 7 -> /volume\n", encoding="utf-8")
+    cfg = parse_config(path)
+    assert cfg.mappings[("control_change", 15, 7)] == OscMapping("/volume")
 
 
 def test_with_overrides() -> None:

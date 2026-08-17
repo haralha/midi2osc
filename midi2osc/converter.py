@@ -128,34 +128,37 @@ def route_midi_message(
 
     if msg_type in ("note_on", "note_off"):
         channel = msg.channel
+        display_ch = channel + 1  # 1-16, same as config / DAWs
         num = msg.note
         val = 0 if msg_type == "note_off" else msg.velocity
         # Mapped "note" / "note_on" entries cover both on and off
         lookup_type = "note_on"
-        midi_sig = f"note {channel} {num}"
+        midi_sig = f"note {display_ch} {num}"
         default_addr = (
-            f"/midi/channel/{channel}/note_on"
+            f"/midi/channel/{display_ch}/note_on"
             if msg_type == "note_on"
-            else f"/midi/channel/{channel}/note_off"
+            else f"/midi/channel/{display_ch}/note_off"
         )
         default_val: OscValue = [num, val]
 
     elif msg_type == "control_change":
         channel = msg.channel
+        display_ch = channel + 1
         num = msg.control
         val = msg.value
         lookup_type = "control_change"
-        midi_sig = f"cc {channel} {num}"
-        default_addr = f"/midi/channel/{channel}/cc/{num}"
+        midi_sig = f"cc {display_ch} {num}"
+        default_addr = f"/midi/channel/{display_ch}/cc/{num}"
         default_val = val
 
     elif msg_type == "program_change":
         channel = msg.channel
+        display_ch = channel + 1
         num = msg.program
         val = msg.program
         lookup_type = "program_change"
-        midi_sig = f"pc {channel} {num}"
-        default_addr = f"/midi/channel/{channel}/program_change"
+        midi_sig = f"pc {display_ch} {num}"
+        default_addr = f"/midi/channel/{display_ch}/program_change"
         default_val = val
 
     elif msg_type == "sysex":

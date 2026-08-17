@@ -15,7 +15,7 @@ def test_note_on_velocity_zero_becomes_note_off_default() -> None:
     msg = SimpleNamespace(type="note_on", channel=0, note=60, velocity=0)
     routed = route_midi_message(msg, mappings={}, convert_unmapped=True)
     assert routed is not None
-    assert routed.osc_address == "/midi/channel/0/note_off"
+    assert routed.osc_address == "/midi/channel/1/note_off"
     assert routed.value == [60, 0]
     assert routed.mapped is False
     assert routed.send is True
@@ -94,9 +94,9 @@ def test_cc_and_program_defaults() -> None:
         {},
     )
     assert cc is not None and pc is not None
-    assert cc.osc_address == "/midi/channel/2/cc/10"
+    assert cc.osc_address == "/midi/channel/3/cc/10"
     assert cc.value == 33
-    assert pc.osc_address == "/midi/channel/2/program_change"
+    assert pc.osc_address == "/midi/channel/3/program_change"
     assert pc.value == 5
 
 

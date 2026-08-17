@@ -15,7 +15,7 @@ MappingKey = tuple[str, Optional[int], Optional[int]]
 
 EXAMPLE_CONFIG = """# midi2osc Configuration File Example
 # -----------------------------------------------
-# Channels are 0-15 (MIDI channel 1 = 0 in this file).
+# Channels are 1-16 (same numbering as most DAWs / controllers).
 # Notes/CC numbers are 0-127.
 #
 # MIDI Port / Device Name (exact name preferred; unique substring also works)
@@ -51,9 +51,9 @@ convert_unmapped = true
 #   "cue_{v}"           -> string template
 #
 # Examples:
-# note 0 60 -> /resolume/layer1/clip1/connect 1
-# cc 0 7 -> /composition/master/volume v/127
-# pc 0 1 -> /qlab/cue/1/start
+# note 1 60 -> /resolume/layer1/clip1/connect 1
+# cc 1 7 -> /composition/master/volume v/127
+# pc 1 1 -> /qlab/cue/1/start
 """
 
 
@@ -226,15 +226,17 @@ def parse_config(config_path: Path) -> AppConfig:
 
                 msg_type = _normalize_msg_type(parts[0])
                 try:
-                    channel = int(parts[1])
+                    channel_1based = int(parts[1])
                     number = int(parts[2])
                 except ValueError:
                     logger.warning("Line %s: invalid mapping values: %s", line_no, line)
                     continue
 
-                if not (0 <= channel <= 15):
+                if not (1 <= channel_1based <= 16):
                     logger.warning(
-                        "Line %s: channel must be 0-15 (got %s)", line_no, channel
+                        "Line %s: channel must be 1-16 (got %s)",
+                        line_no,
+                        channel_1based,
                     )
                     continue
                 if not (0 <= number <= 127):
@@ -245,13 +247,15 @@ def parse_config(config_path: Path) -> AppConfig:
                     )
                     continue
 
+                # Store 0-based to match mido's msg.channel
+                channel = channel_1based - 1
                 key_tuple = (msg_type, channel, number)
                 if key_tuple in config.mappings:
                     logger.warning(
                         "Line %s: duplicate mapping for %s %s %s",
                         line_no,
                         msg_type,
-                        channel,
+                        channel_1based,
                         number,
                     )
                 config.mappings[key_tuple] = mapping

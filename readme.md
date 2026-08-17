@@ -10,7 +10,7 @@ Designed for live performances, stage automation, and media software such as Res
 - Multi-profile support — pick a preset (e.g. `resolume.mapping.txt`, `qlab.mapping.txt`) at launch
 - Optional value expressions (`v/127`, static ints, strings) for OSC payloads
 - Native integer OSC arguments for velocity and CC values (`0–127`) when no expression is set
-- Fallback routing for unmapped messages (e.g. `/midi/channel/0/note_on`)
+- Fallback routing for unmapped messages (e.g. `/midi/channel/1/note_on`)
 - Automatic reconnect when a MIDI device drops
 - Optional virtual MIDI input (`virtual = true`) on macOS/Linux; Windows users can use loopMIDI
 - GUI built with PySide6 for easy control, alongside a headless CLI tool
@@ -97,7 +97,7 @@ midi2osc example
 ### Example
 
 ```
-# Channels are 0-15 (MIDI channel 1 = 0 in this file).
+# Channels are 1-16 (same numbering as most DAWs / controllers).
 # Notes/CC numbers are 0-127.
 
 midi_port = "MIDI2OSC Bridge"
@@ -107,10 +107,10 @@ port = 8000
 convert_unmapped = true
 
 # note / note_on maps both note-on and note-off (incl. note_on velocity 0)
-note 0 60 -> /resolume/layer1/clip1/connect 1
-note 0 61 -> /qlab/cue/1/start
-cc 0 7 -> /composition/master/volume v/127
-pc 0 1 -> /qlab/cue/2/start
+note 1 60 -> /resolume/layer1/clip1/connect 1
+note 1 61 -> /qlab/cue/1/start
+cc 1 7 -> /composition/master/volume v/127
+pc 1 1 -> /qlab/cue/2/start
 ```
 
 ### Settings
@@ -126,7 +126,7 @@ pc 0 1 -> /qlab/cue/2/start
 ### Mapping syntax
 
 ```
-<event> <channel 0-15> <number 0-127> -> /osc/address [expression]
+<event> <channel 1-16> <number 0-127> -> /osc/address [expression]
 sysex -> /midi/sysex
 ```
 
