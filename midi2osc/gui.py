@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QSettings, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QIcon,
     QKeySequence,
     QShortcut,
     QTextCharFormat,
@@ -72,6 +73,14 @@ _STATUS_KEYS = (
 _ERROR_KEYS = ("Error", "Invalid", "✖", "failed", "lost")
 
 
+def app_icon() -> QIcon:
+    """Load the bundled app icon, empty if it is missing."""
+    # PyInstaller one-file builds unpack data files into sys._MEIPASS.
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent))
+    icon_path = base / "midi2osc" / "assets" / "icon.png"
+    return QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+
+
 def _char_format(color: str, *, bold: bool = False) -> QTextCharFormat:
     fmt = QTextCharFormat()
     fmt.setForeground(QColor(color))
@@ -118,6 +127,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("MIDI to OSC Converter")
+        self.setWindowIcon(app_icon())
         self.resize(600, 520)
         self.setMinimumSize(600, 400)
 
@@ -513,6 +523,7 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("MIDI2OSC")
+    app.setWindowIcon(app_icon())
     if sys.platform == "darwin":
         try:
             from Foundation import NSBundle  # type: ignore[import-not-found]

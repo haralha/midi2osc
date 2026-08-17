@@ -182,6 +182,10 @@ poetry run poe build-mac    # macOS
 
 Binaries are written to `bin/`.
 
+### App icon
+
+The icon lives in `midi2osc/assets/`: `icon.png` (1024x1024 master, also used for the Qt window/taskbar icon at runtime), `icon.icns` for the macOS `.app` bundle, and `icon.ico` for the Windows `.exe`. The build tasks pass the platform-specific file via `--icon` and bundle the PNG with `--add-data`. To change the icon, replace the PNG master and regenerate the `.icns` and `.ico` from it.
+
 ## License
 
 Distributed under the MIT License. See LICENSE for details.

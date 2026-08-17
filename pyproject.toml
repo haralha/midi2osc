@@ -56,10 +56,10 @@ clean-temp = "rm -rf build *.spec"
 build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi --hidden-import midi2osc --hidden-import typer --hidden-import rich --collect-submodules rich cli.py"
 
 # Build task for macOS GUI (uses --onedir to bundle .app properly and avoid duplicate Dock icons)
-build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
+build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --icon midi2osc/assets/icon.icns --add-data midi2osc/assets/icon.png:midi2osc/assets --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
 
 # Build task for Windows and Linux GUI (uses --onefile to output a single executable)
-build-gui-single = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
+build-gui-single = "pyinstaller --onefile --windowed --distpath bin --name midi2osc-gui --icon midi2osc/assets/icon.ico --add-data midi2osc/assets/icon.png:midi2osc/assets --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"
 
 # Compound build task for macOS
 build-mac = ["clean", "build-cli", "build-gui-mac", "clean-temp"]
