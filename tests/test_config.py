@@ -44,6 +44,7 @@ cc 1 7 -> /composition/master/volume v/127
 cc 1 10 -> /light/brightness 1 - (v/127)
 note 1 60 -> /clip/connect 1
 pc 1 1 -> /qlab/cue/start "cue_{v}"
+note 1 1 -> /gma3/cmd "Speedmaster 3.1 At {v+50}; FastSync Speedmaster 3.1"
 """,
         encoding="utf-8",
     )
@@ -57,6 +58,10 @@ pc 1 1 -> /qlab/cue/start "cue_{v}"
     assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/connect", "1")
     assert cfg.mappings[("program_change", 0, 1)] == OscMapping(
         "/qlab/cue/start", '"cue_{v}"'
+    )
+    assert cfg.mappings[("note_on", 0, 1)] == OscMapping(
+        "/gma3/cmd",
+        '"Speedmaster 3.1 At {v+50}; FastSync Speedmaster 3.1"',
     )
 
 

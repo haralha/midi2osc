@@ -133,7 +133,7 @@ def route_midi_message(
         val = 0 if msg_type == "note_off" else msg.velocity
         # Mapped "note" / "note_on" entries cover both on and off
         lookup_type = "note_on"
-        midi_sig = f"note {display_ch} {num}"
+        midi_sig = f"{msg_type} {display_ch} {num}"
         default_addr = (
             f"/midi/channel/{display_ch}/note_on"
             if msg_type == "note_on"

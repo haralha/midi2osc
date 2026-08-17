@@ -37,14 +37,56 @@ def _is_quoted_string(src: str) -> bool:
     return len(src) >= 2 and src[0] == '"' and src[-1] == '"'
 
 
+def _format_placeholder_value(result: int | float) -> str:
+    if isinstance(result, float) and result.is_integer():
+        return str(int(result))
+    return str(result)
+
+
+def _eval_formatted_value(node: ast.FormattedValue, v: int) -> str:
+    if node.conversion != -1:
+        raise ExprError("string placeholders do not support !s/!r/!a conversions")
+    if node.format_spec is not None:
+        raise ExprError("string placeholders do not support format specs")
+    _validate_node(node.value)
+    result = _eval_ast(node.value, v)
+    if isinstance(result, bool):
+        raise ExprError("boolean results are not allowed")
+    if not isinstance(result, (int, float)):
+        raise ExprError(f"unexpected result type: {type(result).__name__}")
+    return _format_placeholder_value(result)
+
+
 def eval_string_template(src: str, v: int) -> str:
-    """Evaluate a quoted string template, substituting ``{v}`` only."""
+    """Evaluate a quoted string template with ``{expr}`` placeholders.
+
+    Mapping files use ordinary double-quoted strings; internally they are
+    parsed as Python f-strings so placeholders reuse the same safe AST
+    expression language as numeric values.
+    """
     if not _is_quoted_string(src):
         raise ExprError(f"not a quoted string: {src!r}")
-    inner = src[1:-1]
-    if "{" in inner.replace("{v}", ""):
-        raise ExprError(f"string template only supports {{v}}: {src!r}")
-    return inner.replace("{v}", str(v))
+
+    try:
+        tree = ast.parse("f" + src, mode="eval")
+    except SyntaxError as exc:
+        raise ExprError(f"invalid string template: {exc.msg}") from exc
+
+    body = tree.body
+    if not isinstance(body, ast.JoinedStr):
+        raise ExprError(f"unsupported string template form: {type(body).__name__}")
+
+    parts: list[str] = []
+    for node in body.values:
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, str):
+                raise ExprError(f"unsupported f-string constant: {node.value!r}")
+            parts.append(node.value)
+        elif isinstance(node, ast.FormattedValue):
+            parts.append(_eval_formatted_value(node, v))
+        else:
+            raise ExprError(f"unsupported f-string node: {type(node).__name__}")
+    return "".join(parts)
 
 
 def _validate_node(node: ast.AST) -> None:

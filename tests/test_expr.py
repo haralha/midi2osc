@@ -20,6 +20,15 @@ def test_raw_math_and_casts() -> None:
 def test_string_template() -> None:
     assert evaluate_osc_value('"cue_{v}"', 3) == "cue_3"
     assert evaluate_osc_value('"hello world"', 0) == "hello world"
+    assert evaluate_osc_value('"At {v+50}"', 1) == "At 51"
+    assert (
+        evaluate_osc_value(
+            '"Speedmaster 3.1 At {v+50}; FastSync Speedmaster 3.1"',
+            50,
+        )
+        == "Speedmaster 3.1 At 100; FastSync Speedmaster 3.1"
+    )
+    assert evaluate_osc_value('"a {v} b {int(v/10)}"', 55) == "a 55 b 5"
 
 
 def test_rejects_unknown_names_and_calls() -> None:
@@ -38,6 +47,14 @@ def test_rejects_bad_string_templates() -> None:
         parse_value_expr('"cue_{other}"')
     with pytest.raises(ExprError):
         parse_value_expr("'cue_{v}'")
+    with pytest.raises(ExprError):
+        parse_value_expr('"bad {v"')
+    with pytest.raises(ExprError):
+        parse_value_expr('"bad {v.real}"')
+    with pytest.raises(ExprError, match="format specs"):
+        parse_value_expr('"{v:.2f}"')
+    with pytest.raises(ExprError, match="conversions"):
+        parse_value_expr('"{v!r}"')
 
 
 def test_division_by_zero() -> None:

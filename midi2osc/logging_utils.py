@@ -49,14 +49,14 @@ def build_routed_tokens(routed: RoutedMessage) -> list[tuple[str, str]]:
 
     Layout matches the historical CLI/GUI lines:
 
-    ``MIDI IN: {midi_sig:<12} ➔ MAPPED  -> {addr} [{val}]``
-    ``MIDI IN: {midi_sig:<12} ➔ DEFAULT -> {addr} [{val}]``
-    ``MIDI IN: {midi_sig:<12} ➔ UNMAPPED (LOGGED ONLY) [{val}]``
+    ``MIDI IN: {midi_sig:<16} ➔ MAPPED  -> {addr} [{val}]``
+    ``MIDI IN: {midi_sig:<16} ➔ DEFAULT -> {addr} [{val}]``
+    ``MIDI IN: {midi_sig:<16} ➔ UNMAPPED (LOGGED ONLY) [{val}]``
     """
     val_str = _format_value(routed.value)
     tokens: list[tuple[str, str]] = [
         (STYLE_MIDI_IN, "MIDI IN:"),
-        (STYLE_DEFAULT, f" {routed.midi_sig:<12} ➔ "),
+        (STYLE_DEFAULT, f" {routed.midi_sig:<16} ➔ "),
     ]
     if routed.mapped:
         tokens.append((STYLE_MAPPED, "MAPPED"))

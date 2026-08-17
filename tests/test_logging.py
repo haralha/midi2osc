@@ -38,7 +38,7 @@ def _record_with_routed(routed: RoutedMessage) -> logging.LogRecord:
 
 def test_mapped_tokens_match_historical_layout() -> None:
     routed = RoutedMessage(
-        midi_sig="note 1 60",
+        midi_sig="note_on 1 60",
         osc_address="/clip/start",
         value=100,
         mapped=True,
@@ -47,7 +47,7 @@ def test_mapped_tokens_match_historical_layout() -> None:
     tokens = build_routed_tokens(routed)
     assert tokens[0] == (STYLE_MIDI_IN, "MIDI IN:")
     assert (STYLE_MAPPED, "MAPPED") in tokens
-    assert _join_tokens(routed) == "MIDI IN: note 1 60    ➔ MAPPED  -> /clip/start [100]"
+    assert _join_tokens(routed) == "MIDI IN: note_on 1 60     ➔ MAPPED  -> /clip/start [100]"
 
 
 def test_default_tokens_match_historical_layout() -> None:
@@ -62,7 +62,7 @@ def test_default_tokens_match_historical_layout() -> None:
     assert (STYLE_DEFAULT_STATUS, "DEFAULT") in tokens
     assert (STYLE_DEFAULT, " -> /midi/channel/1/cc/7 [64]") in tokens
     assert _join_tokens(routed) == (
-        "MIDI IN: cc 1 7       ➔ DEFAULT -> /midi/channel/1/cc/7 [64]"
+        "MIDI IN: cc 1 7           ➔ DEFAULT -> /midi/channel/1/cc/7 [64]"
     )
 
 
@@ -77,7 +77,7 @@ def test_unmapped_tokens_match_historical_layout() -> None:
     tokens = build_routed_tokens(routed)
     assert (STYLE_UNMAPPED, "UNMAPPED") in tokens
     assert _join_tokens(routed) == (
-        "MIDI IN: pc 2 5       ➔ UNMAPPED (LOGGED ONLY) [5]"
+        "MIDI IN: pc 2 5           ➔ UNMAPPED (LOGGED ONLY) [5]"
     )
 
 
@@ -97,7 +97,7 @@ def test_color_formatter_uses_routed_msg_extra() -> None:
 
     mapped = formatter.format(
         _record_with_routed(
-            RoutedMessage("note 1 60", "/clip/start", 100, True, True)
+            RoutedMessage("note_on 1 60", "/clip/start", 100, True, True)
         )
     )
     assert f"{Fore.GREEN}{Style.BRIGHT}MAPPED{Style.RESET_ALL}" in mapped

@@ -16,6 +16,7 @@ def test_note_on_velocity_zero_becomes_note_off_default() -> None:
     routed = route_midi_message(msg, mappings={}, convert_unmapped=True)
     assert routed is not None
     assert routed.osc_address == "/midi/channel/1/note_off"
+    assert routed.midi_sig == "note_off 1 60"
     assert routed.value == [60, 0]
     assert routed.mapped is False
     assert routed.send is True
@@ -30,6 +31,8 @@ def test_note_on_and_note_off_share_note_mapping() -> None:
     assert on is not None and off is not None
     assert on.mapped and off.mapped
     assert on.osc_address == off.osc_address == "/clip/start"
+    assert on.midi_sig == "note_on 1 60"
+    assert off.midi_sig == "note_off 1 60"
     assert on.value == 100
     assert off.value == 0
 

@@ -48,7 +48,7 @@ convert_unmapped = true
 #   1                   -> static int
 #   1 - (v/127)         -> inverted float
 #   int(20 + v * 150)   -> scaled int
-#   "cue_{v}"           -> string template
+#   "cue_{v}"           -> string template ({v}, {v+50}, …)
 #
 # Examples:
 # note 1 60 -> /resolume/layer1/clip1/connect 1

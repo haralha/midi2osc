@@ -144,9 +144,10 @@ Event aliases: `note` / `note_on`, `cc` / `control`, `pc` / `program`.
 | `1 - (v/127)` | inverted float |
 | `int(20 + v * 150)` | scaled int |
 | `float(v)` / `int(v / 10)` | explicit cast |
-| `"cue_{v}"` | string (`{v}` only) |
+| `"cue_{v}"` | string with `{v}` |
+| `"At {v+50}"` | string with math inside `{…}` |
 
-Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no `eval`). Sysex mappings cannot use value expressions.
+Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no `eval`). The same rules apply inside string placeholders like `{v+50}`. Sysex mappings cannot use value expressions.
 
 ### CLI overrides
 
