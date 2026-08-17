@@ -12,7 +12,14 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QSettings, QTimer
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QKeySequence,
+    QShortcut,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -34,6 +41,7 @@ from midi2osc.logging_utils import (
     STYLE_DEFAULT_STATUS,
     STYLE_MAPPED,
     STYLE_MIDI_IN,
+    STYLE_MUTED,
     STYLE_UNMAPPED,
     build_routed_tokens,
     setup_logging,
@@ -59,6 +67,7 @@ _STATUS_KEYS = (
     "Convert unmapped",
     "Mappings loaded",
     "Reloading",
+    "OSC output",
 )
 _ERROR_KEYS = ("Error", "Invalid", "✖", "failed", "lost")
 
@@ -114,6 +123,9 @@ class MainWindow(QMainWindow):
 
         self.current_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
+        # Owned by the window so mute survives config reloads; never persisted,
+        # so the app always starts live.
+        self.mute_event = threading.Event()
         self.active_config_path: Path | None = None
         self._log_buffer: deque[logging.LogRecord] = deque(maxlen=LOG_BUFFER_MAX)
         self._midi_log_pending = 0
@@ -126,12 +138,14 @@ class MainWindow(QMainWindow):
         self._fmt_default = _char_format("#FFB74D")
         self._fmt_info = _char_format("#29B6F6")
         self._fmt_error = _char_format("#FF5252", bold=True)
+        self._fmt_muted = _char_format("#CE93D8", bold=True)
         self._routed_style_map = {
             STYLE_MIDI_IN: self._fmt_midi_in,
             STYLE_MAPPED: self._fmt_mapped,
             STYLE_UNMAPPED: self._fmt_unmapped,
             STYLE_DEFAULT_STATUS: self._fmt_default,
             STYLE_DEFAULT: self._fmt_body,
+            STYLE_MUTED: self._fmt_muted,
         }
 
         central_widget = QWidget(self)
@@ -184,6 +198,20 @@ class MainWindow(QMainWindow):
         action_buttons_bar.addWidget(self.btn_new_template)
 
         action_buttons_bar.addStretch()
+
+        self.btn_mute = QPushButton("Mute OSC")
+        self.btn_mute.setToolTip(
+            "Stop sending OSC while still logging incoming MIDI (Ctrl+M)"
+        )
+        self.btn_mute.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mute.setCheckable(True)
+        self.btn_mute.setStyleSheet(self._button_style())
+        self.btn_mute.toggled.connect(self._on_mute_toggled)
+        action_buttons_bar.addWidget(self.btn_mute)
+
+        mute_shortcut = QShortcut(QKeySequence("Ctrl+M"), self)
+        mute_shortcut.activated.connect(self.btn_mute.toggle)
+
         layout.addLayout(action_buttons_bar)
 
         config_label = QLabel("Config File:")
@@ -272,7 +300,28 @@ class MainWindow(QMainWindow):
                 background-color: #222222;
                 border-color: #333333;
             }
+            QPushButton:checked {
+                background-color: #7f1d1d;
+                border-color: #FF5252;
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QPushButton:checked:hover {
+                background-color: #991b1b;
+                border-color: #FF5252;
+            }
         """
+
+    def _on_mute_toggled(self, muted: bool) -> None:
+        """Toggle OSC output without restarting the converter thread."""
+        if muted:
+            self.mute_event.set()
+            self.btn_mute.setText("MUTED - click to unmute")
+            logger.info("OSC output: MUTED")
+        else:
+            self.mute_event.clear()
+            self.btn_mute.setText("Mute OSC")
+            logger.info("OSC output: live")
 
     def browse_config_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -437,7 +486,12 @@ class MainWindow(QMainWindow):
                 logger.info("Active config: %s", config_path.name)
                 logger.info("Listening on MIDI: '%s'", config.midi_port)
                 logger.info("Waiting for incoming MIDI events...")
-                run_from_config(config, stop_event=stop_event, reconnect=True)
+                run_from_config(
+                    config,
+                    stop_event=stop_event,
+                    reconnect=True,
+                    mute_event=self.mute_event,
+                )
             except MidiPortError as exc:
                 logger.error("%s", exc)
             except Exception as exc:

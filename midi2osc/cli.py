@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -81,6 +82,11 @@ def run(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Only log warnings and errors"
     ),
+    mute: bool = typer.Option(
+        False,
+        "--mute",
+        help="Log OSC messages but do not send them (safe local testing)",
+    ),
     no_reconnect: bool = typer.Option(
         False,
         "--no-reconnect",
@@ -89,6 +95,14 @@ def run(
 ) -> None:
     """Run MIDI to OSC conversion with the given configuration file."""
     setup_logging(level=logging.WARNING if quiet else logging.INFO, color=True)
+
+    mute_event = threading.Event()
+    if mute:
+        mute_event.set()
+        # Warning level so the notice survives --quiet.
+        logger.warning(
+            "OSC output is MUTED (--mute): messages are logged but not sent"
+        )
 
     try:
         config = parse_config(config_path).with_overrides(
@@ -101,7 +115,7 @@ def run(
         logger.info("Listening on MIDI: '%s'", config.midi_port)
         logger.info("Waiting for incoming MIDI events (Press Ctrl+C to exit)...")
 
-        run_from_config(config, reconnect=not no_reconnect)
+        run_from_config(config, reconnect=not no_reconnect, mute_event=mute_event)
     except KeyboardInterrupt:
         print("\n[bold yellow]Stopping MIDI to OSC Converter. Goodbye![/bold yellow]")
         raise typer.Exit(code=0)

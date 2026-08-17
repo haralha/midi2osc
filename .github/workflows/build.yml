@@ -58,6 +58,9 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         run: poetry install
 
+      - name: Run tests
+        run: poetry run poe test
+
       # Build for macOS ARM64 (Apple Silicon)
       - name: Build executable (macOS ARM64)
         if: matrix.is_mac == true && matrix.target_arch == 'arm64'

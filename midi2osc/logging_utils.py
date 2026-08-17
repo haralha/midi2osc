@@ -19,6 +19,7 @@ STYLE_MAPPED = "mapped"
 STYLE_UNMAPPED = "unmapped"
 STYLE_DEFAULT_STATUS = "default_status"
 STYLE_DEFAULT = "default"
+STYLE_MUTED = "muted"
 
 _STATUS_KEYWORDS = (
     "Listening on MIDI",
@@ -26,6 +27,7 @@ _STATUS_KEYWORDS = (
     "Active config",
     "Convert unmapped",
     "Mappings loaded",
+    "OSC output",
 )
 
 _ROUTED_STYLE_MAP = {
@@ -34,6 +36,7 @@ _ROUTED_STYLE_MAP = {
     STYLE_UNMAPPED: Fore.WHITE,
     STYLE_DEFAULT_STATUS: Fore.YELLOW,
     STYLE_DEFAULT: Style.RESET_ALL,
+    STYLE_MUTED: f"{Fore.MAGENTA}{Style.BRIGHT}",
 }
 
 
@@ -52,6 +55,8 @@ def build_routed_tokens(routed: RoutedMessage) -> list[tuple[str, str]]:
     ``MIDI IN: {midi_sig:<16} ➔ MAPPED  -> {addr} [{val}]``
     ``MIDI IN: {midi_sig:<16} ➔ DEFAULT -> {addr} [{val}]``
     ``MIDI IN: {midi_sig:<16} ➔ UNMAPPED (LOGGED ONLY) [{val}]``
+
+    Sendable lines get a trailing ``(MUTED)`` marker while output is muted.
     """
     val_str = _format_value(routed.value)
     tokens: list[tuple[str, str]] = [
@@ -67,6 +72,9 @@ def build_routed_tokens(routed: RoutedMessage) -> list[tuple[str, str]]:
     else:
         tokens.append((STYLE_UNMAPPED, "UNMAPPED"))
         tokens.append((STYLE_DEFAULT, f" (LOGGED ONLY) [{val_str}]"))
+
+    if routed.send and routed.muted:
+        tokens.append((STYLE_MUTED, " (MUTED)"))
     return tokens
 
 

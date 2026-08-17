@@ -210,6 +210,50 @@ def test_midi_callback_sends_osc(monkeypatch: pytest.MonkeyPatch) -> None:
         assert not thread.is_alive()
 
 
+def test_mute_event_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    client = MagicMock()
+    mute = threading.Event()
+    mute.set()
+    opened: dict[str, object] = {}
+
+    def open_input(name: str, callback=None, *, virtual: bool = False) -> _FakeMidiPort:
+        port = _FakeMidiPort(callback=callback)
+        opened["port"] = port
+        return port
+
+    stop, thread = _start_converter(
+        port_name="IAC",
+        osc_ip="127.0.0.1",
+        osc_port=8000,
+        mappings={("note_on", 0, 60): OscMapping("/clip/start")},
+        reconnect=False,
+        mute_event=mute,
+        client_factory=lambda ip, port: client,
+        open_input=open_input,
+        list_inputs=lambda: ["IAC"],
+    )
+    try:
+        deadline = time.monotonic() + 2.0
+        while "port" not in opened and time.monotonic() < deadline:
+            time.sleep(0.01)
+        port = opened["port"]
+        assert isinstance(port, _FakeMidiPort)
+
+        msg = SimpleNamespace(type="note_on", channel=0, note=60, velocity=100)
+        port.callback(msg)
+        client.send_message.assert_not_called()
+
+        # Unmuting takes effect without reopening the port.
+        mute.clear()
+        port.callback(msg)
+        client.send_message.assert_called_once_with("/clip/start", 100)
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+
+
 def test_virtual_port_opens_without_resolving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -6,7 +6,7 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Union
 
@@ -46,6 +46,7 @@ class RoutedMessage:
     value: OscValue
     mapped: bool
     send: bool
+    muted: bool = False
 
 def resolve_midi_port(port_name: str, available_ports: Optional[list[str]] = None) -> str:
     """Resolve a configured MIDI port name to an available system port.
@@ -239,9 +240,14 @@ def _dispatch_message(
     convert_unmapped: bool,
     client: Any,
     osc_errors: list[int],
+    muted: bool = False,
 ) -> None:
     routed = route_midi_message(msg, mappings, convert_unmapped)
     if routed is None:
+        return
+
+    if muted:
+        _log_routed(replace(routed, muted=True))
         return
 
     if routed.send:
@@ -300,6 +306,7 @@ def run_converter(
     *,
     virtual: bool = False,
     reconnect: bool = True,
+    mute_event: Optional[threading.Event] = None,
     client_factory: Optional[Callable[[str, int], Any]] = None,
     open_input: Optional[Callable[..., Any]] = None,
     list_inputs: Optional[Callable[[], list[str]]] = None,
@@ -313,6 +320,10 @@ def run_converter(
     When ``virtual`` is True (macOS/Linux), a virtual MIDI input named
     ``port_name`` is created so other apps can send into this process.
     Windows rejects virtual mode with ``MidiPortConfigError``.
+
+    While ``mute_event`` is set, messages are still routed and logged but no
+    OSC packets are sent. The event is read per message, so it can be toggled
+    from another thread without restarting the converter.
 
     When ``reconnect`` is True (default), dropped devices are retried until
     ``stop_event`` is set. A wrong or ambiguous port name is a config error
@@ -353,7 +364,10 @@ def run_converter(
         def on_midi(msg: Any) -> None:
             if _should_stop(stop_event):
                 return
-            _dispatch_message(msg, mappings, convert_unmapped, client, osc_errors)
+            muted = mute_event is not None and mute_event.is_set()
+            _dispatch_message(
+                msg, mappings, convert_unmapped, client, osc_errors, muted
+            )
 
         try:
             if virtual:
@@ -388,12 +402,17 @@ def run_from_config(
     stop_event: Optional[threading.Event] = None,
     *,
     reconnect: bool = True,
+    mute_event: Optional[threading.Event] = None,
 ) -> None:
     """Run the converter using a parsed AppConfig."""
     logger.info("Target OSC: %s:%s", config.ip, config.port)
     logger.info("Convert unmapped: %s", config.convert_unmapped)
     logger.info("Virtual MIDI port: %s", config.virtual)
     logger.info("Mappings loaded: %s", len(config.mappings))
+    logger.info(
+        "OSC output: %s",
+        "MUTED" if mute_event is not None and mute_event.is_set() else "live",
+    )
 
     run_converter(
         config.midi_port,
@@ -404,6 +423,7 @@ def run_from_config(
         convert_unmapped=config.convert_unmapped,
         virtual=config.virtual,
         reconnect=reconnect,
+        mute_event=mute_event,
     )
 
 
@@ -412,9 +432,15 @@ def run_from_config_path(
     stop_event: Optional[threading.Event] = None,
     *,
     reconnect: bool = True,
+    mute_event: Optional[threading.Event] = None,
 ) -> AppConfig:
     """Parse config from disk and run the converter. Returns the config used."""
     config = parse_config(config_path)
     logger.info("Active config: %s", config_path.name)
-    run_from_config(config, stop_event=stop_event, reconnect=reconnect)
+    run_from_config(
+        config,
+        stop_event=stop_event,
+        reconnect=reconnect,
+        mute_event=mute_event,
+    )
     return config

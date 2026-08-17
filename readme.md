@@ -12,6 +12,7 @@ Designed for live performances, stage automation, and media software such as Res
 - Native integer OSC arguments for velocity and CC values (`0–127`) when no expression is set
 - Fallback routing for unmapped messages (e.g. `/midi/channel/1/note_on`)
 - Automatic reconnect when a MIDI device drops
+- Mute OSC output at runtime (`--mute` in the CLI, toggle button in the GUI) for safe local testing
 - Optional virtual MIDI input (`virtual = true`) on macOS/Linux; Windows users can use loopMIDI
 - GUI built with PySide6 for easy control, alongside a headless CLI tool
 
@@ -155,7 +156,14 @@ Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no
 midi2osc run show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
 midi2osc run show.mapping.txt --quiet
 midi2osc run show.mapping.txt --no-reconnect
+midi2osc run show.mapping.txt --mute
 ```
+
+### Muting OSC output
+
+`--mute` keeps everything running but skips the actual UDP send, so incoming MIDI is still logged with the resolved OSC address and value (marked `(MUTED)`). Useful for verifying a new mapping file or checking which channel/CC a controller sends on without triggering anything in QLab, Resolume, or similar.
+
+In the GUI, the **Mute OSC** button (or `Ctrl+M`) toggles the same behaviour while running. Mute survives a config reload but always starts off when the app launches.
 
 Other commands:
 
