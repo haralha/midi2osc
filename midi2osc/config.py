@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from midi2osc.expr import ExprError, parse_value_expr
+
 logger = logging.getLogger("midi2osc")
 
 MappingKey = tuple[str, Optional[int], Optional[int]]
@@ -17,7 +19,12 @@ EXAMPLE_CONFIG = """# midi2osc Configuration File Example
 # Notes/CC numbers are 0-127.
 #
 # MIDI Port / Device Name (exact name preferred; unique substring also works)
-midi_port = "IAC Driver Bus 1"
+midi_port = "MIDI2OSC Bridge"
+
+# Create a virtual MIDI input port with that name? (true/false)
+# macOS/Linux: mido creates the port so DAWs can send MIDI into this app.
+# Windows: not supported — use loopMIDI (or similar) and set virtual = false.
+virtual = true
 
 # Target OSC Destination
 ip = "127.0.0.1"
@@ -28,18 +35,34 @@ port = 8000
 convert_unmapped = true
 
 # MIDI to OSC Mappings
-# Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH]
+# Format: [MIDI_EVENT] [CHANNEL] [NOTE_OR_CC] -> [OSC_PATH] [OPTIONAL_VALUE_EXPR]
 #
 # Event aliases:
 #   note / note_on  -> note on AND note off (including note_on velocity 0)
 #   cc / control    -> control_change
 #   pc / program    -> program_change
 #
+# Value expression (optional): use v for the incoming MIDI value (0-127).
+#   (omit)              -> raw int 0-127
+#   v/127               -> float 0.0-1.0
+#   1                   -> static int
+#   1 - (v/127)         -> inverted float
+#   int(20 + v * 150)   -> scaled int
+#   "cue_{v}"           -> string template
+#
 # Examples:
-# note 0 60 -> /resolume/layer1/clip1/connect
-# cc 0 7 -> /composition/master/volume
+# note 0 60 -> /resolume/layer1/clip1/connect 1
+# cc 0 7 -> /composition/master/volume v/127
 # pc 0 1 -> /qlab/cue/1/start
 """
+
+
+@dataclass(frozen=True)
+class OscMapping:
+    """OSC destination for a MIDI mapping key."""
+
+    address: str
+    value_expr: Optional[str] = None
 
 
 @dataclass
@@ -50,7 +73,8 @@ class AppConfig:
     port: int = 7700
     midi_port: str = ""
     convert_unmapped: bool = True
-    mappings: dict[MappingKey, str] = field(default_factory=dict)
+    virtual: bool = False
+    mappings: dict[MappingKey, OscMapping] = field(default_factory=dict)
 
     def with_overrides(
         self,
@@ -59,6 +83,7 @@ class AppConfig:
         port: Optional[int] = None,
         midi_port: Optional[str] = None,
         convert_unmapped: Optional[bool] = None,
+        virtual: Optional[bool] = None,
     ) -> AppConfig:
         """Return a copy with optional CLI/runtime overrides applied."""
         return AppConfig(
@@ -70,6 +95,7 @@ class AppConfig:
                 if convert_unmapped is not None
                 else self.convert_unmapped
             ),
+            virtual=virtual if virtual is not None else self.virtual,
             mappings=dict(self.mappings),
         )
 
@@ -88,6 +114,41 @@ def _normalize_msg_type(raw: str) -> str:
     if token == "sysex":
         return "sysex"
     return token
+
+
+def _parse_osc_rhs(rhs: str, line_no: int) -> Optional[OscMapping]:
+    """Split OSC path and optional value expression from the right-hand side."""
+    text = rhs.strip()
+    if not text:
+        logger.warning("Line %s: empty OSC destination", line_no)
+        return None
+
+    parts = text.split(None, 1)
+    address = parts[0]
+    value_expr = parts[1].strip() if len(parts) > 1 else None
+    if value_expr == "":
+        value_expr = None
+
+    if not address.startswith("/"):
+        logger.warning(
+            "Line %s: OSC address should start with '/': %s",
+            line_no,
+            text,
+        )
+
+    if value_expr is not None:
+        try:
+            parse_value_expr(value_expr)
+        except ExprError as exc:
+            logger.warning(
+                "Line %s: invalid value expression %r: %s",
+                line_no,
+                value_expr,
+                exc,
+            )
+            return None
+
+    return OscMapping(address=address, value_expr=value_expr)
 
 
 def parse_config(config_path: Path) -> AppConfig:
@@ -133,26 +194,30 @@ def parse_config(config_path: Path) -> AppConfig:
                     config.midi_port = val
                 elif key in ("convert_unmapped", "convert_all", "passthrough"):
                     config.convert_unmapped = val.lower() in ("true", "1", "yes", "on")
+                elif key in ("virtual", "virtual_port", "create_virtual"):
+                    config.virtual = val.lower() in ("true", "1", "yes", "on")
                 else:
                     logger.warning("Line %s: unknown setting '%s'", line_no, key)
 
             elif "->" in line:
-                left, osc_address = line.split("->", 1)
-                osc_address = osc_address.strip()
+                left, rhs = line.split("->", 1)
+                mapping = _parse_osc_rhs(rhs, line_no)
+                if mapping is None:
+                    continue
+
                 parts = left.strip().split()
 
-                if not osc_address.startswith("/"):
-                    logger.warning(
-                        "Line %s: OSC address should start with '/': %s",
-                        line_no,
-                        line,
-                    )
-
                 if len(parts) == 1 and parts[0].lower() == "sysex":
+                    if mapping.value_expr is not None:
+                        logger.warning(
+                            "Line %s: value expressions are not supported for sysex",
+                            line_no,
+                        )
+                        continue
                     key_tuple: MappingKey = ("sysex", None, None)
                     if key_tuple in config.mappings:
                         logger.warning("Line %s: duplicate mapping for sysex", line_no)
-                    config.mappings[key_tuple] = osc_address
+                    config.mappings[key_tuple] = mapping
                     continue
 
                 if len(parts) != 3:
@@ -189,7 +254,7 @@ def parse_config(config_path: Path) -> AppConfig:
                         channel,
                         number,
                     )
-                config.mappings[key_tuple] = osc_address
+                config.mappings[key_tuple] = mapping
             else:
                 logger.warning("Line %s: unrecognized line: %s", line_no, line)
 

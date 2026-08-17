@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from midi2osc.config import parse_config
+from midi2osc.config import OscMapping, parse_config
 
 
 def test_parse_basic_settings_and_mappings(tmp_path: Path) -> None:
@@ -13,6 +13,7 @@ ip = 10.0.0.5
 port = 9000
 midi_port = "IAC Driver Bus 1"
 convert_unmapped = false
+virtual = true
 
 note 0 60 -> /clip/1
 cc 0 7 -> /volume
@@ -27,10 +28,49 @@ sysex -> /midi/sysex
     assert cfg.port == 9000
     assert cfg.midi_port == "IAC Driver Bus 1"
     assert cfg.convert_unmapped is False
-    assert cfg.mappings[("note_on", 0, 60)] == "/clip/1"
-    assert cfg.mappings[("control_change", 0, 7)] == "/volume"
-    assert cfg.mappings[("program_change", 1, 3)] == "/program"
-    assert cfg.mappings[("sysex", None, None)] == "/midi/sysex"
+    assert cfg.virtual is True
+    assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/1")
+    assert cfg.mappings[("control_change", 0, 7)] == OscMapping("/volume")
+    assert cfg.mappings[("program_change", 1, 3)] == OscMapping("/program")
+    assert cfg.mappings[("sysex", None, None)] == OscMapping("/midi/sysex")
+
+
+def test_parse_value_expressions(tmp_path: Path) -> None:
+    path = tmp_path / "expr.mapping.txt"
+    path.write_text(
+        """
+cc 0 7 -> /composition/master/volume v/127
+cc 0 10 -> /light/brightness 1 - (v/127)
+note 0 60 -> /clip/connect 1
+pc 0 1 -> /qlab/cue/start "cue_{v}"
+""",
+        encoding="utf-8",
+    )
+    cfg = parse_config(path)
+    assert cfg.mappings[("control_change", 0, 7)] == OscMapping(
+        "/composition/master/volume", "v/127"
+    )
+    assert cfg.mappings[("control_change", 0, 10)] == OscMapping(
+        "/light/brightness", "1 - (v/127)"
+    )
+    assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/connect", "1")
+    assert cfg.mappings[("program_change", 0, 1)] == OscMapping(
+        "/qlab/cue/start", '"cue_{v}"'
+    )
+
+
+def test_rejects_invalid_value_expression(tmp_path: Path) -> None:
+    path = tmp_path / "bad-expr.mapping.txt"
+    path.write_text("cc 0 7 -> /volume __import__('os')\n", encoding="utf-8")
+    cfg = parse_config(path)
+    assert cfg.mappings == {}
+
+
+def test_rejects_sysex_value_expression(tmp_path: Path) -> None:
+    path = tmp_path / "sysex-expr.mapping.txt"
+    path.write_text("sysex -> /midi/sysex v\n", encoding="utf-8")
+    cfg = parse_config(path)
+    assert cfg.mappings == {}
 
 
 def test_aliases_and_section_headers(tmp_path: Path) -> None:
@@ -68,9 +108,17 @@ def test_rejects_out_of_range_channel(tmp_path: Path) -> None:
 def test_with_overrides() -> None:
     from midi2osc.config import AppConfig
 
-    base = AppConfig(ip="1.1.1.1", port=1, midi_port="A", convert_unmapped=False)
-    updated = base.with_overrides(ip="2.2.2.2", midi_port="B")
+    base = AppConfig(
+        ip="1.1.1.1",
+        port=1,
+        midi_port="A",
+        convert_unmapped=False,
+        virtual=True,
+    )
+    updated = base.with_overrides(ip="2.2.2.2", midi_port="B", virtual=False)
     assert updated.ip == "2.2.2.2"
     assert updated.port == 1
     assert updated.midi_port == "B"
     assert updated.convert_unmapped is False
+    assert updated.virtual is False
+    assert base.virtual is True

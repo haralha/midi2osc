@@ -29,7 +29,15 @@ from PySide6.QtWidgets import (
 
 from midi2osc.config import EXAMPLE_CONFIG, parse_config
 from midi2osc.converter import MidiPortError, run_from_config
-from midi2osc.logging_utils import setup_logging
+from midi2osc.logging_utils import (
+    STYLE_DEFAULT,
+    STYLE_DEFAULT_STATUS,
+    STYLE_MAPPED,
+    STYLE_MIDI_IN,
+    STYLE_UNMAPPED,
+    build_routed_tokens,
+    setup_logging,
+)
 
 logger = logging.getLogger("midi2osc")
 
@@ -66,22 +74,34 @@ def _char_format(color: str, *, bold: bool = False) -> QTextCharFormat:
 class QtLogEmitter(QObject):
     """Bridge logging records onto the Qt event loop."""
 
-    text_written = Signal(str)
+    record_emitted = Signal(object)
 
 
 class QtLogHandler(logging.Handler):
-    """Thread-safe logging handler that emits plain text to Qt."""
+    """Thread-safe logging handler that emits LogRecord objects to Qt."""
 
     def __init__(self, emitter: QtLogEmitter) -> None:
         super().__init__()
         self.emitter = emitter
-        self.setFormatter(logging.Formatter("%(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self.emitter.text_written.emit(self.format(record))
+            self.emitter.record_emitted.emit(record)
         except Exception:
             self.handleError(record)
+
+
+def _plain_log_record(message: str, level: int = logging.INFO) -> logging.LogRecord:
+    """Build a LogRecord that only carries a plain message (no routed_msg)."""
+    return logging.LogRecord(
+        name="midi2osc",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
+    )
 
 
 class MainWindow(QMainWindow):
@@ -95,7 +115,7 @@ class MainWindow(QMainWindow):
         self.current_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
         self.active_config_path: Path | None = None
-        self._log_buffer: deque[str] = deque(maxlen=LOG_BUFFER_MAX)
+        self._log_buffer: deque[logging.LogRecord] = deque(maxlen=LOG_BUFFER_MAX)
         self._midi_log_pending = 0
         self._midi_log_dropped = 0
         self._fmt_time = _char_format("#555555")
@@ -106,6 +126,13 @@ class MainWindow(QMainWindow):
         self._fmt_default = _char_format("#FFB74D")
         self._fmt_info = _char_format("#29B6F6")
         self._fmt_error = _char_format("#FF5252", bold=True)
+        self._routed_style_map = {
+            STYLE_MIDI_IN: self._fmt_midi_in,
+            STYLE_MAPPED: self._fmt_mapped,
+            STYLE_UNMAPPED: self._fmt_unmapped,
+            STYLE_DEFAULT_STATUS: self._fmt_default,
+            STYLE_DEFAULT: self._fmt_body,
+        }
 
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
@@ -203,7 +230,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log_area)
 
         self._log_emitter = QtLogEmitter()
-        self._log_emitter.text_written.connect(self._enqueue_log_line)
+        self._log_emitter.record_emitted.connect(self._enqueue_log_line)
         self._log_handler = QtLogHandler(self._log_emitter)
         setup_logging(handler=self._log_handler)
 
@@ -212,18 +239,18 @@ class MainWindow(QMainWindow):
         self._log_timer.timeout.connect(self._flush_log_buffer)
         self._log_timer.start()
 
+        # Restore the last config if it still exists; otherwise wait for the user.
         settings = QSettings("midi2osc", "MIDI2OSC")
         last_path_str = settings.value("last_config_path", "")
         last_file = Path(str(last_path_str)) if last_path_str else None
-        default_file = Path("default.mapping.txt")
 
         if last_file and last_file.exists():
             self.load_config(last_file)
-        elif default_file.exists():
-            self.load_config(default_file)
         else:
+            logger.info("Welcome to MIDI2OSC!")
             logger.info(
-                "Please select a config file using 'Open...' or create a 'New Template'."
+                "Please open a configuration file ('Open...') "
+                "or create a new one ('New Template')."
             )
 
     def _button_style(self) -> str:
@@ -323,20 +350,22 @@ class MainWindow(QMainWindow):
         logger.info("Loading configuration: %s", config_path.name)
         self.start_engine(config_path)
 
-    def _enqueue_log_line(self, line_text: str) -> None:
-        if "MIDI IN:" in line_text:
+    def _enqueue_log_line(self, record: logging.LogRecord) -> None:
+        if getattr(record, "routed_msg", None) is not None:
             self._midi_log_pending += 1
             if self._midi_log_pending > LOG_MIDI_MAX_PER_FLUSH:
                 self._midi_log_dropped += 1
                 return
-        self._log_buffer.append(line_text)
+        self._log_buffer.append(record)
 
     def _flush_log_buffer(self) -> None:
         dropped = self._midi_log_dropped
         self._midi_log_dropped = 0
         self._midi_log_pending = 0
         if dropped:
-            self._log_buffer.append(f"… dropped {dropped} MIDI log lines")
+            self._log_buffer.append(
+                _plain_log_record(f"… dropped {dropped} MIDI log lines")
+            )
 
         if not self._log_buffer:
             return
@@ -354,43 +383,26 @@ class MainWindow(QMainWindow):
         self.log_area.setTextCursor(cursor)
         self.log_area.ensureCursorVisible()
 
-    def _insert_log_line(self, cursor: QTextCursor, line_text: str) -> None:
+    def _insert_log_line(self, cursor: QTextCursor, record: logging.LogRecord) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         cursor.insertText(f"[{timestamp}] ", self._fmt_time)
 
+        routed = getattr(record, "routed_msg", None)
+        if routed is not None:
+            for style_key, text in build_routed_tokens(routed):
+                fmt = self._routed_style_map.get(style_key, self._fmt_body)
+                cursor.insertText(text, fmt)
+            cursor.insertText("\n", self._fmt_body)
+            return
+
+        line_text = record.getMessage()
         if any(k in line_text for k in _ERROR_KEYS):
             base = self._fmt_error
         elif any(k in line_text for k in _STATUS_KEYS):
             base = self._fmt_info
         else:
             base = self._fmt_body
-
-        remaining = line_text
-        if "MIDI IN:" in remaining:
-            before, _, remaining = remaining.partition("MIDI IN:")
-            if before:
-                cursor.insertText(before, base)
-            cursor.insertText("MIDI IN:", self._fmt_midi_in)
-
-        token_fmt = None
-        token = None
-        if "UNMAPPED" in remaining:
-            token, token_fmt = "UNMAPPED", self._fmt_unmapped
-        elif "MAPPED" in remaining:
-            token, token_fmt = "MAPPED", self._fmt_mapped
-        if token is not None and token_fmt is not None:
-            before, _, remaining = remaining.partition(token)
-            if before:
-                cursor.insertText(before, base)
-            cursor.insertText(token, token_fmt)
-
-        if "DEFAULT" in remaining:
-            before, _, remaining = remaining.partition("DEFAULT")
-            if before:
-                cursor.insertText(before, base)
-            cursor.insertText("DEFAULT", self._fmt_default)
-
-        cursor.insertText(remaining + "\n", base)
+        cursor.insertText(line_text + "\n", base)
 
     def stop_current_engine(self) -> None:
         """Signal the running converter thread to stop cleanly."""

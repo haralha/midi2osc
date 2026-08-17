@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, NoReturn, Optional, Union
 
 import mido
 from pythonosc import udp_client
 
-from midi2osc.config import AppConfig, MappingKey, parse_config
+from midi2osc.config import AppConfig, MappingKey, OscMapping, parse_config
+from midi2osc.expr import ExprError, evaluate_osc_value
+from midi2osc.logging_utils import build_routed_tokens
 
 logger = logging.getLogger("midi2osc")
 
@@ -27,7 +30,11 @@ class MidiPortError(RuntimeError):
     """Raised when a MIDI port cannot be resolved or opened."""
 
 
-OscValue = Union[int, list[int]]
+class MidiPortConfigError(MidiPortError):
+    """Configured MIDI port name is empty, unknown, or ambiguous."""
+
+
+OscValue = Union[int, float, str, list[int]]
 
 
 @dataclass(frozen=True)
@@ -39,7 +46,6 @@ class RoutedMessage:
     value: OscValue
     mapped: bool
     send: bool
-
 
 def resolve_midi_port(port_name: str, available_ports: Optional[list[str]] = None) -> str:
     """Resolve a configured MIDI port name to an available system port.
@@ -58,8 +64,11 @@ def resolve_midi_port(port_name: str, available_ports: Optional[list[str]] = Non
 
     clean = (port_name or "").strip()
     if not clean:
-        _log_available_ports(available)
-        raise MidiPortError("No MIDI port specified in configuration.")
+        _raise_unknown_port(
+            available,
+            "No MIDI port specified in configuration. "
+            "Set midi_port in your mapping config to one of the names listed above.",
+        )
 
     if clean in available:
         return clean
@@ -77,13 +86,17 @@ def resolve_midi_port(port_name: str, available_ports: Optional[list[str]] = Non
         )
         return matched[0]
     if len(matched) > 1:
-        _log_available_ports(available)
-        raise MidiPortError(
-            f"MIDI port '{clean}' is ambiguous; matches: {', '.join(matched)}"
+        _raise_unknown_port(
+            available,
+            f"MIDI port '{clean}' is ambiguous; matches: {', '.join(matched)}. "
+            "Update midi_port in your mapping config to the exact device name.",
         )
 
-    _log_available_ports(available)
-    raise MidiPortError(f"MIDI port '{clean}' not found.")
+    _raise_unknown_port(
+        available,
+        f"MIDI port '{clean}' not found. "
+        "Update midi_port in your mapping config to one of the names listed above.",
+    )
 
 
 def _log_available_ports(ports: list[str]) -> None:
@@ -92,9 +105,15 @@ def _log_available_ports(ports: list[str]) -> None:
         logger.info("  [%s] %s", i, name)
 
 
+def _raise_unknown_port(ports: list[str], message: str) -> NoReturn:
+    """Log available ports once, then raise a non-retryable config error."""
+    _log_available_ports(ports)
+    raise MidiPortConfigError(message)
+
+
 def route_midi_message(
     msg: Any,
-    mappings: dict[MappingKey, str],
+    mappings: dict[MappingKey, OscMapping],
     convert_unmapped: bool = True,
 ) -> Optional[RoutedMessage]:
     """Map a mido-like message to an OSC route, or None if unsupported."""
@@ -154,12 +173,34 @@ def route_midi_message(
     key: MappingKey = (lookup_type, channel, num)
 
     if key in mappings:
+        mapping = mappings[key]
+        out_value: OscValue = val
+        send = True
+        if mapping.value_expr is not None:
+            if isinstance(val, list):
+                logger.warning(
+                    "Value expression ignored for %s (list payloads unsupported)",
+                    midi_sig,
+                )
+                send = False
+            else:
+                try:
+                    out_value = evaluate_osc_value(mapping.value_expr, int(val))
+                except ExprError as exc:
+                    logger.warning(
+                        "Failed to evaluate %r for %s (v=%s): %s",
+                        mapping.value_expr,
+                        midi_sig,
+                        val,
+                        exc,
+                    )
+                    send = False
         return RoutedMessage(
             midi_sig=midi_sig,
-            osc_address=mappings[key],
-            value=val,
+            osc_address=mapping.address,
+            value=out_value,
             mapped=True,
-            send=True,
+            send=send,
         )
 
     return RoutedMessage(
@@ -171,34 +212,10 @@ def route_midi_message(
     )
 
 
-def _format_value(value: OscValue) -> str:
-    if isinstance(value, (list, tuple)):
-        return " ".join(map(str, value))
-    return str(value)
-
-
 def _log_routed(routed: RoutedMessage) -> None:
-    val_str = _format_value(routed.value)
-    if routed.mapped:
-        logger.info(
-            "MIDI IN: %-12s ➔ MAPPED  -> %s [%s]",
-            routed.midi_sig,
-            routed.osc_address,
-            val_str,
-        )
-    elif routed.send:
-        logger.info(
-            "MIDI IN: %-12s ➔ DEFAULT -> %s [%s]",
-            routed.midi_sig,
-            routed.osc_address,
-            val_str,
-        )
-    else:
-        logger.info(
-            "MIDI IN: %-12s ➔ UNMAPPED (LOGGED ONLY) [%s]",
-            routed.midi_sig,
-            val_str,
-        )
+    """Log a routed MIDI event using the shared token layout."""
+    message = "".join(text for _, text in build_routed_tokens(routed))
+    logger.info(message, extra={"routed_msg": routed})
 
 
 def _should_stop(stop_event: Optional[threading.Event]) -> bool:
@@ -215,7 +232,7 @@ def _wait_idle(stop_event: Optional[threading.Event], timeout: float) -> bool:
 
 def _dispatch_message(
     msg: Any,
-    mappings: dict[MappingKey, str],
+    mappings: dict[MappingKey, OscMapping],
     convert_unmapped: bool,
     client: Any,
     osc_errors: list[int],
@@ -240,19 +257,45 @@ def _dispatch_message(
 
 
 def _open_mido_input(
-    name: str, callback: Optional[Callable[[Any], None]] = None
+    name: str,
+    callback: Optional[Callable[[Any], None]] = None,
+    *,
+    virtual: bool = False,
 ) -> Any:
-    return mido.open_input(name, callback=callback)
+    return mido.open_input(name, callback=callback, virtual=virtual)
+
+
+def _resolve_listen_port(port_name: str, *, virtual: bool, get_names: Callable[[], list[str]]) -> str:
+    """Return the MIDI port name to open, creating a virtual port when requested."""
+    clean = (port_name or "").strip()
+    if virtual:
+        if not clean:
+            raise MidiPortConfigError(
+                "No MIDI port specified in configuration. "
+                "Set midi_port to the virtual port name to create "
+                '(for example midi_port = "MIDI2OSC Bridge").'
+            )
+        # Windows cannot create virtual MIDI ports via mido/rtmidi.
+        if sys.platform == "win32":
+            raise MidiPortConfigError(
+                "Virtual MIDI ports are not supported on Windows. "
+                "Create a port with loopMIDI (or similar), set virtual = false, "
+                f"and point midi_port at that port name (wanted: '{clean}')."
+            )
+        return clean
+
+    return resolve_midi_port(port_name, available_ports=get_names())
 
 
 def run_converter(
     port_name: str,
     osc_ip: str,
     osc_port: int,
-    mappings: dict[MappingKey, str],
+    mappings: dict[MappingKey, OscMapping],
     stop_event: Optional[threading.Event] = None,
     convert_unmapped: bool = True,
     *,
+    virtual: bool = False,
     reconnect: bool = True,
     client_factory: Optional[Callable[[str, int], Any]] = None,
     open_input: Optional[Callable[..., Any]] = None,
@@ -264,9 +307,14 @@ def run_converter(
     The converter thread blocks until ``stop_event`` is set, and periodically
     checks that the device is still present so dropped ports can reconnect.
 
+    When ``virtual`` is True (macOS/Linux), a virtual MIDI input named
+    ``port_name`` is created so other apps can send into this process.
+    Windows rejects virtual mode with ``MidiPortConfigError``.
+
     When ``reconnect`` is True (default), dropped devices are retried until
-    ``stop_event`` is set. Raises ``MidiPortError`` if the port cannot be
-    resolved on the first attempt and reconnect is disabled.
+    ``stop_event`` is set. A wrong or ambiguous port name is a config error
+    (``MidiPortConfigError``) and is not retried. Raises ``MidiPortError`` if
+    no devices are present and reconnect is disabled.
     """
     make_client = client_factory or (
         lambda ip, port: udp_client.SimpleUDPClient(ip, port)
@@ -281,7 +329,12 @@ def run_converter(
 
     while not _should_stop(stop_event):
         try:
-            target_port = resolve_midi_port(port_name, available_ports=get_names())
+            target_port = _resolve_listen_port(
+                port_name, virtual=virtual, get_names=get_names
+            )
+        except MidiPortConfigError:
+            # Typo / unknown name / unsupported virtual mode: do not retry.
+            raise
         except MidiPortError as exc:
             if not reconnect:
                 raise
@@ -300,12 +353,15 @@ def run_converter(
             _dispatch_message(msg, mappings, convert_unmapped, client, osc_errors)
 
         try:
-            with open_port(target_port, callback=on_midi):
+            if virtual:
+                logger.info("Creating virtual MIDI input: '%s'", target_port)
+            with open_port(target_port, callback=on_midi, virtual=virtual):
                 logger.info("Listening on MIDI: '%s'", target_port)
                 while not _should_stop(stop_event):
                     if _wait_idle(stop_event, PORT_CHECK_S):
                         return
-                    if target_port not in get_names():
+                    # Virtual ports are owned by this process; skip device presence checks.
+                    if not virtual and target_port not in get_names():
                         raise RuntimeError(f"MIDI port '{target_port}' disconnected")
 
         except MidiPortError:
@@ -333,6 +389,7 @@ def run_from_config(
     """Run the converter using a parsed AppConfig."""
     logger.info("Target OSC: %s:%s", config.ip, config.port)
     logger.info("Convert unmapped: %s", config.convert_unmapped)
+    logger.info("Virtual MIDI port: %s", config.virtual)
     logger.info("Mappings loaded: %s", len(config.mappings))
 
     run_converter(
@@ -342,6 +399,7 @@ def run_from_config(
         config.mappings,
         stop_event=stop_event,
         convert_unmapped=config.convert_unmapped,
+        virtual=config.virtual,
         reconnect=reconnect,
     )
 

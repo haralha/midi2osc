@@ -8,9 +8,11 @@ Designed for live performances, stage automation, and media software such as Res
 
 - Human-readable `*.mapping.txt` configs for MIDI note, CC, and program routing
 - Multi-profile support — pick a preset (e.g. `resolume.mapping.txt`, `qlab.mapping.txt`) at launch
-- Native integer OSC arguments for velocity and CC values (`0–127`)
+- Optional value expressions (`v/127`, static ints, strings) for OSC payloads
+- Native integer OSC arguments for velocity and CC values (`0–127`) when no expression is set
 - Fallback routing for unmapped messages (e.g. `/midi/channel/0/note_on`)
 - Automatic reconnect when a MIDI device drops
+- Optional virtual MIDI input (`virtual = true`) on macOS/Linux; Windows users can use loopMIDI
 - GUI built with PySide6 for easy control, alongside a headless CLI tool
 
 ## Prerequisites
@@ -56,10 +58,11 @@ pipx install .
 ### 3. Usage via pipx
 
 ```bash
-midi2osc-gui          # GUI
-midi2osc              # CLI
-midi2osc -d           # list MIDI devices
-pipx upgrade midi2osc # update later
+midi2osc-gui                    # GUI
+midi2osc run show.mapping.txt   # CLI
+midi2osc list                   # list MIDI devices
+midi2osc generate               # create a template config
+pipx upgrade midi2osc           # update later
 ```
 
 ## Development & Local Execution
@@ -81,7 +84,14 @@ poetry run poe test
 Use a `*.mapping.txt` file. Generate a starter template with:
 
 ```bash
-midi2osc --generate-config
+midi2osc generate
+# or: midi2osc generate -o show.mapping.txt
+```
+
+Print an example to stdout without writing a file:
+
+```bash
+midi2osc example
 ```
 
 ### Example
@@ -90,15 +100,16 @@ midi2osc --generate-config
 # Channels are 0-15 (MIDI channel 1 = 0 in this file).
 # Notes/CC numbers are 0-127.
 
-midi_port = "IAC Driver Bus 1"
+midi_port = "MIDI2OSC Bridge"
+virtual = true
 ip = "127.0.0.1"
 port = 8000
 convert_unmapped = true
 
 # note / note_on maps both note-on and note-off (incl. note_on velocity 0)
-note 0 60 -> /resolume/layer1/clip1/connect
+note 0 60 -> /resolume/layer1/clip1/connect 1
 note 0 61 -> /qlab/cue/1/start
-cc 0 7 -> /composition/master/volume
+cc 0 7 -> /composition/master/volume v/127
 pc 0 1 -> /qlab/cue/2/start
 ```
 
@@ -106,7 +117,8 @@ pc 0 1 -> /qlab/cue/2/start
 
 | Key | Description |
 |-----|-------------|
-| `midi_port` | MIDI input device name (exact preferred; unique substring also works) |
+| `midi_port` | MIDI input device name (exact preferred; unique substring also works). With `virtual = true`, this is the name of the port to create. |
+| `virtual` / `virtual_port` / `create_virtual` | If `true`, create a virtual MIDI input (macOS/Linux). On Windows use loopMIDI and keep this `false`. |
 | `ip` / `host` | Target OSC IP (default `127.0.0.1`) |
 | `port` / `osc_port` | Target OSC UDP port (default `7700`) |
 | `convert_unmapped` | If `true`, unmapped messages are sent to `/midi/...` defaults; if `false`, they are only logged |
@@ -114,20 +126,42 @@ pc 0 1 -> /qlab/cue/2/start
 ### Mapping syntax
 
 ```
-<event> <channel 0-15> <number 0-127> -> /osc/address
+<event> <channel 0-15> <number 0-127> -> /osc/address [expression]
 sysex -> /midi/sysex
 ```
 
 Event aliases: `note` / `note_on`, `cc` / `control`, `pc` / `program`.
 
-**Note semantics:** `note_on` with velocity `0` is treated as note-off (MIDI convention). A single `note` mapping covers both on and off; the OSC value is the velocity (`0` for off).
+**Note semantics:** `note_on` with velocity `0` is treated as note-off (MIDI convention). A single `note` mapping covers both on and off; the OSC value is the velocity (`0` for off), unless a value expression overrides it.
+
+**Value expressions (optional):** After the OSC path you may add an expression. Use `v` for the incoming MIDI value (`0–127`). If omitted, the raw integer is sent.
+
+| Expression | Result |
+|------------|--------|
+| *(omit)* | raw int `0–127` |
+| `v/127` | float `0.0–1.0` |
+| `1` | static int |
+| `1 - (v/127)` | inverted float |
+| `int(20 + v * 150)` | scaled int |
+| `float(v)` / `int(v / 10)` | explicit cast |
+| `"cue_{v}"` | string (`{v}` only) |
+
+Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no `eval`). Sysex mappings cannot use value expressions.
 
 ### CLI overrides
 
 ```bash
-midi2osc -c show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
-midi2osc -c show.mapping.txt --quiet
-midi2osc -c show.mapping.txt --no-reconnect
+midi2osc run show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
+midi2osc run show.mapping.txt --quiet
+midi2osc run show.mapping.txt --no-reconnect
+```
+
+Other commands:
+
+```bash
+midi2osc list
+midi2osc generate
+midi2osc example
 ```
 
 ## Building Executables

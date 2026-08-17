@@ -10,7 +10,9 @@ dependencies = [
     "python-rtmidi (>=1.5.8,<2.0.0)",
     "python-osc (>=1.10.2,<2.0.0)",
     "pyside6-essentials (>=6.4.0,<6.5.0)",
-    "colorama (>=0.4.6,<0.5.0)"
+    "colorama (>=0.4.6,<0.5.0)",
+    "typer (>=0.15.0,<1.0.0)",
+    "rich (>=13.0.0,<15.0.0)",
 ]
 
 [project.scripts]
@@ -51,7 +53,7 @@ clean = "rm -rf build bin *.spec"
 clean-temp = "rm -rf build *.spec"
 
 # Build task for CLI executable (single-file across all OS)
-build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi --hidden-import midi2osc cli.py"
+build-cli = "pyinstaller --onefile --distpath bin --name midi2osc --hidden-import mido.backends.rtmidi --hidden-import midi2osc --hidden-import typer --hidden-import rich --collect-submodules rich cli.py"
 
 # Build task for macOS GUI (uses --onedir to bundle .app properly and avoid duplicate Dock icons)
 build-gui-mac = "pyinstaller --onedir --windowed --distpath bin --name midi2osc-gui --hidden-import mido.backends.rtmidi --hidden-import midi2osc gui.py"

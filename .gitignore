@@ -37,3 +37,4 @@ Thumbs.db
 # Uncomment the line below if you want to keep local mapping tests off GitHub:
 # *.mapping.txt
 
+default.mapping.txt

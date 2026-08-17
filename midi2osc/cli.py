@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 import logging
-import sys
 from pathlib import Path
+from typing import Optional
 
 import mido
-from colorama import Fore, Style
+import typer
+from rich import print
 
 from midi2osc.config import EXAMPLE_CONFIG, parse_config
 from midi2osc.converter import MidiPortError, run_from_config
@@ -16,136 +16,106 @@ from midi2osc.logging_utils import setup_logging
 
 logger = logging.getLogger("midi2osc")
 
+app = typer.Typer(
+    help="MIDI to OSC Converter CLI",
+    add_completion=False,
+    no_args_is_help=True,
+)
 
-def list_midi_devices() -> None:
-    """Print all available MIDI input ports."""
+
+@app.command(name="list")
+def list_devices() -> None:
+    """List all available MIDI input ports."""
     try:
         inputs = mido.get_input_names()  # type: ignore[attr-defined]
-        print(f"{Fore.CYAN}Available MIDI Input Devices:{Style.RESET_ALL}")
+        print("[cyan]Available MIDI Input Devices:[/cyan]")
         if not inputs:
             print("  (No MIDI input devices found)")
             return
         for name in inputs:
             print(f"  - {name}")
     except Exception as exc:
-        print(f"{Fore.RED}✖ Error querying MIDI devices: {exc}{Style.RESET_ALL}")
+        print(f"[bold red]✖ Error querying MIDI devices: {exc}[/bold red]")
+        raise typer.Exit(code=1)
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="MIDI to OSC Converter CLI")
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=Path,
-        help="Path to mapping configuration file (*.mapping.txt)",
-    )
-    parser.add_argument(
-        "-d",
-        "--list-devices",
-        action="store_true",
-        help="List available MIDI input devices and exit",
-    )
-    parser.add_argument(
-        "--example-config",
-        action="store_true",
-        help="Print an example mapping configuration file to stdout and exit",
-    )
-    parser.add_argument(
-        "--generate-config",
-        action="store_true",
-        help="Create a 'default.mapping.txt' template in the current directory and exit",
-    )
-    parser.add_argument(
-        "--midi-port",
-        help="Override midi_port from the config file",
-    )
-    parser.add_argument(
-        "--ip",
-        help="Override OSC destination IP",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        help="Override OSC destination UDP port",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Only log warnings and errors",
-    )
-    parser.add_argument(
+@app.command()
+def generate(
+    output: Path = typer.Option(
+        Path("default.mapping.txt"),
+        "-o",
+        "--out",
+        help="Path for the new configuration template",
+    ),
+) -> None:
+    """Create a new mapping configuration template."""
+    if output.exists():
+        print(f"[bold red]✖ Error: '{output}' already exists.[/bold red]")
+        raise typer.Exit(code=1)
+
+    output.write_text(EXAMPLE_CONFIG.strip() + "\n", encoding="utf-8")
+    print(f"[bold green]✔ Created '{output}' successfully![/bold green]")
+
+
+@app.command()
+def example() -> None:
+    """Print an example mapping configuration to stdout."""
+    print(EXAMPLE_CONFIG.strip())
+
+
+@app.command()
+def run(
+    config_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to the mapping configuration file (*.mapping.txt)",
+    ),
+    ip: Optional[str] = typer.Option(None, help="Override OSC destination IP"),
+    port: Optional[int] = typer.Option(None, help="Override OSC destination UDP port"),
+    midi_port: Optional[str] = typer.Option(
+        None, "--midi-port", help="Override MIDI port name"
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Only log warnings and errors"
+    ),
+    no_reconnect: bool = typer.Option(
+        False,
         "--no-reconnect",
-        action="store_true",
-        help="Exit instead of retrying when the MIDI device disconnects",
-    )
-
-    args = parser.parse_args(argv)
-
-    if args.list_devices:
-        list_midi_devices()
-        sys.exit(0)
-
-    if args.example_config:
-        print(EXAMPLE_CONFIG.strip())
-        sys.exit(0)
-
-    if args.generate_config:
-        out_path = Path("default.mapping.txt")
-        if out_path.exists():
-            print(
-                f"{Fore.RED}✖ Error: 'default.mapping.txt' already exists "
-                f"in this directory.{Style.RESET_ALL}"
-            )
-            sys.exit(1)
-        out_path.write_text(EXAMPLE_CONFIG.strip() + "\n", encoding="utf-8")
-        print(f"{Fore.GREEN}✔ Created 'default.mapping.txt' successfully!{Style.RESET_ALL}")
-        sys.exit(0)
-
-    if args.config:
-        config_path = args.config
-        if not config_path.exists():
-            print(
-                f"{Fore.RED}✖ Error: Config file '{config_path}' not found.{Style.RESET_ALL}"
-            )
-            sys.exit(1)
-    else:
-        default_file = Path("default.mapping.txt")
-        if default_file.exists():
-            config_path = default_file
-        else:
-            print(
-                f"{Fore.RED}✖ Error: No config file specified and "
-                f"'default.mapping.txt' was not found.{Style.RESET_ALL}"
-            )
-            print("Usage: midi2osc -c <path/to/mapping.txt>")
-            print("       midi2osc -d / --list-devices")
-            print("       midi2osc --generate-config")
-            sys.exit(1)
-
-    setup_logging(level=logging.WARNING if args.quiet else logging.INFO, color=True)
+        help="Exit on disconnect instead of retrying",
+    ),
+) -> None:
+    """Run MIDI to OSC conversion with the given configuration file."""
+    setup_logging(level=logging.WARNING if quiet else logging.INFO, color=True)
 
     try:
-        config = parse_config(config_path)
-        config = config.with_overrides(
-            ip=args.ip,
-            port=args.port,
-            midi_port=args.midi_port,
+        config = parse_config(config_path).with_overrides(
+            ip=ip,
+            port=port,
+            midi_port=midi_port,
         )
 
         logger.info("Active config: %s", config_path.name)
         logger.info("Listening on MIDI: '%s'", config.midi_port)
         logger.info("Waiting for incoming MIDI events (Press Ctrl+C to exit)...")
 
-        run_from_config(config, reconnect=not args.no_reconnect)
+        run_from_config(config, reconnect=not no_reconnect)
     except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Stopping MIDI to OSC Converter. Goodbye!{Style.RESET_ALL}")
-        sys.exit(0)
+        print("\n[bold yellow]Stopping MIDI to OSC Converter. Goodbye![/bold yellow]")
+        raise typer.Exit(code=0)
     except MidiPortError as exc:
         logger.error("✖ %s", exc)
-        sys.exit(1)
+        raise typer.Exit(code=1)
     except Exception as exc:
         logger.error("✖ Error: %s", exc)
-        sys.exit(1)
+        raise typer.Exit(code=1)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for console scripts and PyInstaller."""
+    app(args=argv, prog_name="midi2osc")
 
 
 if __name__ == "__main__":
