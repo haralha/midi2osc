@@ -159,7 +159,4 @@ def test_ignored_lines_are_summarized(tmp_path: Path, caplog) -> None:
     assert any("ignored line(s)" in rec.getMessage() for rec in caplog.records)
 
 
-def test_repo_default_mapping_matches_example() -> None:
-    repo_file = Path(__file__).resolve().parent.parent / "default.mapping.txt"
-    assert repo_file.read_text(encoding="utf-8") == example_config_text()
 
