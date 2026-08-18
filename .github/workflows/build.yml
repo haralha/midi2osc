@@ -90,11 +90,21 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: .\bin\midi2osc.exe --help
 
+      - name: Zip build outputs
+        shell: bash
+        run: |
+          cd bin
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            7z a ../${{ matrix.artifact_name }}.zip *
+          else
+            zip -r ../${{ matrix.artifact_name }}.zip *
+          fi
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: bin/
+          path: ${{ matrix.artifact_name }}.zip
 
   release:
     name: Create GitHub Release
