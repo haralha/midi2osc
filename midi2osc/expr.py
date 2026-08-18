@@ -7,6 +7,7 @@ import operator
 from typing import Callable, Union
 
 ExprResult = Union[int, float, str]
+ParsedExpr = ast.Expression | str
 
 _BIN_OPS: dict[type[ast.operator], Callable[[int | float, int | float], int | float]] = {
     ast.Add: operator.add,
@@ -129,7 +130,7 @@ def _validate_node(node: ast.AST) -> None:
     raise ExprError(f"unsupported expression node: {type(node).__name__}")
 
 
-def parse_value_expr(src: str) -> ast.Expression | str:
+def parse_value_expr(src: str) -> ParsedExpr:
     """Parse and validate a value expression.
 
     Returns a quoted string (still including quotes) or an ``ast.Expression``
@@ -195,7 +196,7 @@ def _eval_ast(node: ast.AST, v: int) -> int | float:
     raise ExprError(f"unsupported expression node: {type(node).__name__}")
 
 
-def eval_value_expr(expr: ast.Expression | str, v: int) -> ExprResult:
+def eval_value_expr(expr: ParsedExpr, v: int) -> ExprResult:
     """Evaluate a previously parsed expression with MIDI value ``v``."""
     if isinstance(expr, str):
         return eval_string_template(expr, v)

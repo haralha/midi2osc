@@ -21,14 +21,7 @@ STYLE_DEFAULT_STATUS = "default_status"
 STYLE_DEFAULT = "default"
 STYLE_MUTED = "muted"
 
-_STATUS_KEYWORDS = (
-    "Listening on MIDI",
-    "Target OSC",
-    "Active config",
-    "Convert unmapped",
-    "Mappings loaded",
-    "OSC output",
-)
+LOG_KIND_STATUS = "status"
 
 _ROUTED_STYLE_MAP = {
     STYLE_MIDI_IN: f"{Fore.GREEN}{Style.BRIGHT}",
@@ -38,6 +31,30 @@ _ROUTED_STYLE_MAP = {
     STYLE_DEFAULT: Style.RESET_ALL,
     STYLE_MUTED: f"{Fore.MAGENTA}{Style.BRIGHT}",
 }
+
+
+def log_status(msg: str, *args: object) -> None:
+    """Log a lifecycle/status line that UIs can color without substring matching."""
+    logging.getLogger("midi2osc").info(msg, *args, extra={"log_kind": LOG_KIND_STATUS})
+
+
+def record_log_kind(record: logging.LogRecord) -> str | None:
+    """Return the explicit log category, if the record was tagged with one."""
+    kind = getattr(record, "log_kind", None)
+    return kind if isinstance(kind, str) else None
+
+
+def record_routed_tokens(
+    record: logging.LogRecord,
+) -> list[tuple[str, str]] | None:
+    """Return prebuilt routed-log tokens, building them once if needed."""
+    tokens = getattr(record, "routed_tokens", None)
+    if tokens is not None:
+        return tokens
+    routed = getattr(record, "routed_msg", None)
+    if routed is None:
+        return None
+    return build_routed_tokens(routed)
 
 
 def _format_value(value: object) -> str:
@@ -82,35 +99,21 @@ class ColorFormatter(logging.Formatter):
     """Colorize midi2osc log lines for terminal output."""
 
     def format(self, record: logging.LogRecord) -> str:
-        routed = getattr(record, "routed_msg", None)
-        if routed is not None:
+        tokens = record_routed_tokens(record)
+        if tokens is not None:
             colored_parts = []
-            for style_key, text in build_routed_tokens(routed):
+            for style_key, text in tokens:
                 color = _ROUTED_STYLE_MAP.get(style_key, "")
                 colored_parts.append(f"{color}{text}{Style.RESET_ALL}")
             return "".join(colored_parts)
 
         text = super().format(record)
 
-        # Safety net for MIDI lines logged without routed_msg extra.
-        if "MIDI IN:" in text:
-            text = text.replace(
-                "MIDI IN:", f"{Fore.GREEN}{Style.BRIGHT}MIDI IN:{Style.RESET_ALL}"
-            )
-        if "UNMAPPED" in text:
-            text = text.replace("UNMAPPED", f"{Fore.WHITE}UNMAPPED{Style.RESET_ALL}")
-        elif "MAPPED" in text:
-            text = text.replace(
-                "MAPPED", f"{Fore.GREEN}{Style.BRIGHT}MAPPED{Style.RESET_ALL}"
-            )
-        if "DEFAULT" in text:
-            text = text.replace("DEFAULT", f"{Fore.YELLOW}DEFAULT{Style.RESET_ALL}")
-
         if record.levelno >= logging.ERROR:
             return f"{Fore.RED}{Style.BRIGHT}{text}{Style.RESET_ALL}"
         if record.levelno >= logging.WARNING:
             return f"{Fore.YELLOW}{text}{Style.RESET_ALL}"
-        if any(k in text for k in _STATUS_KEYWORDS):
+        if record_log_kind(record) == LOG_KIND_STATUS:
             return f"{Fore.CYAN}{text}{Style.RESET_ALL}"
         return text
 

@@ -8,6 +8,7 @@ from colorama import Fore, Style
 
 from midi2osc.converter import RoutedMessage
 from midi2osc.logging_utils import (
+    LOG_KIND_STATUS,
     STYLE_DEFAULT,
     STYLE_DEFAULT_STATUS,
     STYLE_MAPPED,
@@ -16,6 +17,7 @@ from midi2osc.logging_utils import (
     STYLE_UNMAPPED,
     ColorFormatter,
     build_routed_tokens,
+    record_routed_tokens,
 )
 
 
@@ -154,3 +156,43 @@ def test_color_formatter_uses_routed_msg_extra() -> None:
     )
     assert f"{Fore.WHITE}UNMAPPED{Style.RESET_ALL}" in unmapped
     assert f"{Fore.GREEN}{Style.BRIGHT}MIDI IN:{Style.RESET_ALL}" in unmapped
+
+
+def test_color_formatter_uses_log_kind_for_status() -> None:
+    formatter = ColorFormatter("%(message)s")
+    record = logging.LogRecord(
+        name="midi2osc",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="Listening on MIDI: 'IAC'",
+        args=(),
+        exc_info=None,
+    )
+    record.log_kind = LOG_KIND_STATUS  # type: ignore[attr-defined]
+    text = formatter.format(record)
+    assert f"{Fore.CYAN}Listening on MIDI: 'IAC'{Style.RESET_ALL}" == text
+
+
+def test_color_formatter_does_not_substring_match_midi_tokens() -> None:
+    formatter = ColorFormatter("%(message)s")
+    record = logging.LogRecord(
+        name="midi2osc",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="plain line mentioning MIDI IN: MAPPED DEFAULT UNMAPPED",
+        args=(),
+        exc_info=None,
+    )
+    text = formatter.format(record)
+    assert text == "plain line mentioning MIDI IN: MAPPED DEFAULT UNMAPPED"
+
+
+def test_record_routed_tokens_prefers_prebuilt() -> None:
+    routed = RoutedMessage("cc 1 7", "/volume", 1, True, True)
+    record = _record_with_routed(routed)
+    prebuilt = [("custom", "prebuilt")]
+    record.routed_tokens = prebuilt  # type: ignore[attr-defined]
+    assert record_routed_tokens(record) == prebuilt
+

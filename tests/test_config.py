@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from midi2osc.config import OscMapping, parse_config
+from midi2osc.config import MappingKey, OscMapping, example_config_text, parse_config
 
 
 def test_parse_basic_settings_and_mappings(tmp_path: Path) -> None:
@@ -30,10 +30,12 @@ sysex -> /midi/sysex
     assert cfg.convert_unmapped is False
     assert cfg.virtual is True
     # Config channels are 1-16; stored 0-based to match mido
-    assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/1")
-    assert cfg.mappings[("control_change", 0, 7)] == OscMapping("/volume")
-    assert cfg.mappings[("program_change", 1, 3)] == OscMapping("/program")
-    assert cfg.mappings[("sysex", None, None)] == OscMapping("/midi/sysex")
+    assert cfg.mappings[MappingKey("note_on", 0, 60)] == OscMapping("/clip/1")
+    assert cfg.mappings[MappingKey("control_change", 0, 7)] == OscMapping("/volume")
+    assert cfg.mappings[MappingKey("program_change", 1, 3)] == OscMapping("/program")
+    assert cfg.mappings[MappingKey("sysex", None, None)] == OscMapping("/midi/sysex")
+    # NamedTuple keys still compare equal to plain tuples.
+    assert ("note_on", 0, 60) in cfg.mappings
 
 
 def test_parse_value_expressions(tmp_path: Path) -> None:
@@ -49,20 +51,22 @@ note 1 1 -> /gma3/cmd "Speedmaster 3.1 At {v+50}; FastSync Speedmaster 3.1"
         encoding="utf-8",
     )
     cfg = parse_config(path)
-    assert cfg.mappings[("control_change", 0, 7)] == OscMapping(
+    assert cfg.mappings[MappingKey("control_change", 0, 7)] == OscMapping(
         "/composition/master/volume", "v/127"
     )
-    assert cfg.mappings[("control_change", 0, 10)] == OscMapping(
+    assert cfg.mappings[MappingKey("control_change", 0, 10)] == OscMapping(
         "/light/brightness", "1 - (v/127)"
     )
-    assert cfg.mappings[("note_on", 0, 60)] == OscMapping("/clip/connect", "1")
-    assert cfg.mappings[("program_change", 0, 1)] == OscMapping(
+    assert cfg.mappings[MappingKey("note_on", 0, 60)] == OscMapping("/clip/connect", "1")
+    assert cfg.mappings[MappingKey("program_change", 0, 1)] == OscMapping(
         "/qlab/cue/start", '"cue_{v}"'
     )
-    assert cfg.mappings[("note_on", 0, 1)] == OscMapping(
+    assert cfg.mappings[MappingKey("note_on", 0, 1)] == OscMapping(
         "/gma3/cmd",
         '"Speedmaster 3.1 At {v+50}; FastSync Speedmaster 3.1"',
     )
+    compiled = cfg.mappings[MappingKey("control_change", 0, 7)].compiled_expr
+    assert compiled is not None
 
 
 def test_rejects_invalid_value_expression(tmp_path: Path) -> None:
@@ -102,6 +106,9 @@ program 3 12 -> /c
     assert ("note_on", 2, 10) in cfg.mappings
     assert ("control_change", 2, 11) in cfg.mappings
     assert ("program_change", 2, 12) in cfg.mappings
+    note_key = next(k for k in cfg.mappings if k.msg_type == "note_on")
+    assert note_key.channel == 2
+    assert note_key.number == 10
 
 
 def test_rejects_out_of_range_channel(tmp_path: Path) -> None:
@@ -118,7 +125,7 @@ def test_accepts_channel_16(tmp_path: Path) -> None:
     path = tmp_path / "ch16.mapping.txt"
     path.write_text("cc 16 7 -> /volume\n", encoding="utf-8")
     cfg = parse_config(path)
-    assert cfg.mappings[("control_change", 15, 7)] == OscMapping("/volume")
+    assert cfg.mappings[MappingKey("control_change", 15, 7)] == OscMapping("/volume")
 
 
 def test_with_overrides() -> None:
@@ -138,3 +145,21 @@ def test_with_overrides() -> None:
     assert updated.convert_unmapped is False
     assert updated.virtual is False
     assert base.virtual is True
+
+
+def test_ignored_lines_are_summarized(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "ignored.mapping.txt"
+    path.write_text(
+        "note 0 60 -> /x\nnot a mapping or setting\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        cfg = parse_config(path)
+    assert cfg.mappings == {}
+    assert any("ignored line(s)" in rec.getMessage() for rec in caplog.records)
+
+
+def test_repo_default_mapping_matches_example() -> None:
+    repo_file = Path(__file__).resolve().parent.parent / "default.mapping.txt"
+    assert repo_file.read_text(encoding="utf-8") == example_config_text()
+

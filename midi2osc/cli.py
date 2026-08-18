@@ -11,9 +11,9 @@ import mido
 import typer
 from rich import print
 
-from midi2osc.config import EXAMPLE_CONFIG, parse_config
+from midi2osc.config import EXAMPLE_CONFIG, example_config_text, parse_config
 from midi2osc.converter import MidiPortError, run_from_config
-from midi2osc.logging_utils import setup_logging
+from midi2osc.logging_utils import log_status, setup_logging
 
 logger = logging.getLogger("midi2osc")
 
@@ -54,7 +54,7 @@ def generate(
         print(f"[bold red]✖ Error: '{output}' already exists.[/bold red]")
         raise typer.Exit(code=1)
 
-    output.write_text(EXAMPLE_CONFIG.strip() + "\n", encoding="utf-8")
+    output.write_text(example_config_text(), encoding="utf-8")
     print(f"[bold green]✔ Created '{output}' successfully![/bold green]")
 
 
@@ -111,9 +111,8 @@ def run(
             midi_port=midi_port,
         )
 
-        logger.info("Active config: %s", config_path.name)
-        logger.info("Listening on MIDI: '%s'", config.midi_port)
-        logger.info("Waiting for incoming MIDI events (Press Ctrl+C to exit)...")
+        log_status("Active config: %s", config_path.name)
+        log_status("Waiting for incoming MIDI events (Press Ctrl+C to exit)...")
 
         run_from_config(config, reconnect=not no_reconnect, mute_event=mute_event)
     except KeyboardInterrupt:

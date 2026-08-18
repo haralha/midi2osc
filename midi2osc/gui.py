@@ -35,16 +35,19 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from midi2osc.config import EXAMPLE_CONFIG, parse_config
+from midi2osc.config import example_config_text, parse_config
 from midi2osc.converter import MidiPortError, run_from_config
 from midi2osc.logging_utils import (
+    LOG_KIND_STATUS,
     STYLE_DEFAULT,
     STYLE_DEFAULT_STATUS,
     STYLE_MAPPED,
     STYLE_MIDI_IN,
     STYLE_MUTED,
     STYLE_UNMAPPED,
-    build_routed_tokens,
+    log_status,
+    record_log_kind,
+    record_routed_tokens,
     setup_logging,
 )
 
@@ -56,21 +59,7 @@ LOG_FLUSH_MAX_LINES = 80
 LOG_MIDI_MAX_PER_FLUSH = 25
 LOG_MAX_BLOCKS = 1000
 ENGINE_JOIN_TIMEOUT_S = 2.0
-ENGINE_REOPEN_PAUSE_S = 0.15
-
-_STATUS_KEYS = (
-    "Listening on MIDI",
-    "Target OSC",
-    "Active config",
-    "Loading",
-    "Opened",
-    "Created",
-    "Convert unmapped",
-    "Mappings loaded",
-    "Reloading",
-    "OSC output",
-)
-_ERROR_KEYS = ("Error", "Invalid", "✖", "failed", "lost")
+ENGINE_REOPEN_PAUSE_MS = 150
 
 
 def app_icon() -> QIcon:
@@ -128,11 +117,15 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("MIDI to OSC Converter")
         self.setWindowIcon(app_icon())
-        self.resize(600, 520)
-        self.setMinimumSize(600, 400)
+        self.resize(800, 520)
+        self.setMinimumSize(400, 300)
 
         self.current_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
+        self._pending_engine_path: Path | None = None
+        self._engine_start_timer = QTimer(self)
+        self._engine_start_timer.setSingleShot(True)
+        self._engine_start_timer.timeout.connect(self._launch_pending_engine)
         # Owned by the window so mute survives config reloads; never persisted,
         # so the app always starts live.
         self.mute_event = threading.Event()
@@ -285,8 +278,8 @@ class MainWindow(QMainWindow):
         if last_file and last_file.exists():
             self.load_config(last_file)
         else:
-            logger.info("Welcome to MIDI2OSC!")
-            logger.info(
+            log_status("Welcome to MIDI2OSC!")
+            log_status(
                 "Please open a configuration file ('Open...') "
                 "or create a new one ('New Template')."
             )
@@ -327,11 +320,11 @@ class MainWindow(QMainWindow):
         if muted:
             self.mute_event.set()
             self.btn_mute.setText("MUTED - click to unmute")
-            logger.info("OSC output: MUTED")
+            log_status("OSC output: MUTED")
         else:
             self.mute_event.clear()
             self.btn_mute.setText("Mute OSC")
-            logger.info("OSC output: live")
+            log_status("OSC output: live")
 
     def browse_config_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -362,7 +355,7 @@ class MainWindow(QMainWindow):
                 os.startfile(file_str)  # type: ignore[attr-defined]
             else:
                 subprocess.run(["xdg-open", file_str], check=True)
-            logger.info("Opened '%s' in external text editor.", self.active_config_path.name)
+            log_status("Opened '%s' in external text editor.", self.active_config_path.name)
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -380,7 +373,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        logger.info("Reloading active config: %s", self.active_config_path.name)
+        log_status("Reloading active config: %s", self.active_config_path.name)
         self.load_config(self.active_config_path)
 
     def create_new_template(self) -> None:
@@ -393,8 +386,8 @@ class MainWindow(QMainWindow):
         if file_path:
             target_path = Path(file_path)
             try:
-                target_path.write_text(EXAMPLE_CONFIG.strip() + "\n", encoding="utf-8")
-                logger.info("Created template at: %s", target_path.name)
+                target_path.write_text(example_config_text(), encoding="utf-8")
+                log_status("Created template at: %s", target_path.name)
                 self.load_config(target_path)
             except Exception as exc:
                 QMessageBox.critical(self, "Error", f"Failed to create template: {exc}")
@@ -406,7 +399,7 @@ class MainWindow(QMainWindow):
         settings = QSettings("midi2osc", "MIDI2OSC")
         settings.setValue("last_config_path", str(config_path.resolve()))
 
-        logger.info("Loading configuration: %s", config_path.name)
+        log_status("Loading configuration: %s", config_path.name)
         self.start_engine(config_path)
 
     def _enqueue_log_line(self, record: logging.LogRecord) -> None:
@@ -446,25 +439,31 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         cursor.insertText(f"[{timestamp}] ", self._fmt_time)
 
-        routed = getattr(record, "routed_msg", None)
-        if routed is not None:
-            for style_key, text in build_routed_tokens(routed):
+        tokens = record_routed_tokens(record)
+        if tokens is not None:
+            for style_key, text in tokens:
                 fmt = self._routed_style_map.get(style_key, self._fmt_body)
                 cursor.insertText(text, fmt)
             cursor.insertText("\n", self._fmt_body)
             return
 
         line_text = record.getMessage()
-        if any(k in line_text for k in _ERROR_KEYS):
+        if record.levelno >= logging.ERROR:
             base = self._fmt_error
-        elif any(k in line_text for k in _STATUS_KEYS):
+        elif record.levelno >= logging.WARNING:
+            base = self._fmt_default
+        elif record_log_kind(record) == LOG_KIND_STATUS:
             base = self._fmt_info
         else:
             base = self._fmt_body
         cursor.insertText(line_text + "\n", base)
 
-    def stop_current_engine(self) -> None:
-        """Signal the running converter thread to stop cleanly."""
+    def stop_current_engine(self) -> bool:
+        """Signal the running converter thread to stop.
+
+        Returns True if the previous engine is gone, False if it is still
+        running after the join timeout.
+        """
         if self.stop_event:
             self.stop_event.set()
         if self.current_thread and self.current_thread.is_alive():
@@ -474,18 +473,41 @@ class MainWindow(QMainWindow):
                     "Previous MIDI engine did not stop within %.1fs",
                     ENGINE_JOIN_TIMEOUT_S,
                 )
+                return False
         self.current_thread = None
         self.stop_event = None
+        return True
 
     def start_engine(self, config_path: Path) -> None:
         if not config_path or not config_path.exists():
             logger.error("Invalid or missing config file.")
             return
 
-        self.stop_current_engine()
-        # Brief pause so OS MIDI backends can release the previous handle.
-        if ENGINE_REOPEN_PAUSE_S > 0:
-            threading.Event().wait(ENGINE_REOPEN_PAUSE_S)
+        self._engine_start_timer.stop()
+        had_running = self.current_thread is not None and self.current_thread.is_alive()
+        self._pending_engine_path = config_path
+
+        if not self.stop_current_engine():
+            self._engine_start_timer.start(ENGINE_REOPEN_PAUSE_MS)
+            return
+
+        if had_running:
+            # Let the OS MIDI backend release the previous handle without
+            # freezing the UI thread.
+            self._engine_start_timer.start(ENGINE_REOPEN_PAUSE_MS)
+            return
+
+        self._launch_pending_engine()
+
+    def _launch_pending_engine(self) -> None:
+        config_path = self._pending_engine_path
+        if config_path is None:
+            return
+
+        if self.current_thread is not None and self.current_thread.is_alive():
+            logger.warning("Previous MIDI engine still running; retrying...")
+            self._engine_start_timer.start(ENGINE_REOPEN_PAUSE_MS)
+            return
 
         self.stop_event = threading.Event()
         stop_event = self.stop_event
@@ -493,9 +515,8 @@ class MainWindow(QMainWindow):
         def worker() -> None:
             try:
                 config = parse_config(config_path)
-                logger.info("Active config: %s", config_path.name)
-                logger.info("Listening on MIDI: '%s'", config.midi_port)
-                logger.info("Waiting for incoming MIDI events...")
+                log_status("Active config: %s", config_path.name)
+                log_status("Waiting for incoming MIDI events...")
                 run_from_config(
                     config,
                     stop_event=stop_event,
@@ -513,6 +534,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         """Clean shutdown when closing GUI window."""
         self._log_timer.stop()
+        self._engine_start_timer.stop()
+        self._pending_engine_path = None
         self.stop_current_engine()
         root = logging.getLogger("midi2osc")
         if self._log_handler in root.handlers:

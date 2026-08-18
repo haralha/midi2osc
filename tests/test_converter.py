@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from midi2osc.config import OscMapping
+from midi2osc.config import MappingKey, OscMapping
 from midi2osc.converter import MidiPortError, resolve_midi_port, route_midi_message, run_converter
 
 
@@ -23,7 +23,7 @@ def test_note_on_velocity_zero_becomes_note_off_default() -> None:
 
 
 def test_note_on_and_note_off_share_note_mapping() -> None:
-    mappings = {("note_on", 0, 60): OscMapping("/clip/start")}
+    mappings = {MappingKey("note_on", 0, 60): OscMapping("/clip/start")}
     on_msg = SimpleNamespace(type="note_on", channel=0, note=60, velocity=100)
     off_msg = SimpleNamespace(type="note_off", channel=0, note=60, velocity=64)
     on = route_midi_message(on_msg, mappings)
@@ -39,8 +39,8 @@ def test_note_on_and_note_off_share_note_mapping() -> None:
 
 def test_mapped_value_expression_float_and_static() -> None:
     mappings = {
-        ("control_change", 0, 7): OscMapping("/volume", "v/127"),
-        ("note_on", 0, 60): OscMapping("/clip/connect", "1"),
+        MappingKey("control_change", 0, 7): OscMapping("/volume", "v/127"),
+        MappingKey("note_on", 0, 60): OscMapping("/clip/connect", "1"),
     }
     cc = route_midi_message(
         SimpleNamespace(type="control_change", channel=0, control=7, value=127),
@@ -58,7 +58,7 @@ def test_mapped_value_expression_float_and_static() -> None:
 
 
 def test_mapped_value_expression_string() -> None:
-    mappings = {("program_change", 0, 1): OscMapping("/qlab/start", '"cue_{v}"')}
+    mappings = {MappingKey("program_change", 0, 1): OscMapping("/qlab/start", '"cue_{v}"')}
     routed = route_midi_message(
         SimpleNamespace(type="program_change", channel=0, program=1),
         mappings,
@@ -69,7 +69,7 @@ def test_mapped_value_expression_string() -> None:
 
 
 def test_bad_runtime_expression_skips_send() -> None:
-    mappings = {("control_change", 0, 7): OscMapping("/volume", "v / 0")}
+    mappings = {MappingKey("control_change", 0, 7): OscMapping("/volume", "v / 0")}
     routed = route_midi_message(
         SimpleNamespace(type="control_change", channel=0, control=7, value=10),
         mappings,
@@ -149,6 +149,34 @@ def test_unknown_port_does_not_reconnect() -> None:
     assert calls["n"] == 1
 
 
+def test_runtime_does_not_reparse_value_expr(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapping = OscMapping("/volume", "v/127")
+    assert mapping.compiled_expr is not None
+
+    def boom(_src: str) -> None:
+        raise AssertionError("value expressions must not be reparsed on the hot path")
+
+    monkeypatch.setattr("midi2osc.expr.parse_value_expr", boom)
+    monkeypatch.setattr("midi2osc.config.parse_value_expr", boom)
+
+    routed = route_midi_message(
+        SimpleNamespace(type="control_change", channel=0, control=7, value=127),
+        {MappingKey("control_change", 0, 7): mapping},
+    )
+    assert routed is not None
+    assert routed.send is True
+    assert routed.value == 1.0
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition not met in time")
+
+
 class _FakeMidiPort:
     def __init__(self, callback=None) -> None:
         self.callback = callback
@@ -175,6 +203,7 @@ def _start_converter(**kwargs):
 
 def test_midi_callback_sends_osc(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.QUEUE_POLL_S", 0.01)
     client = MagicMock()
     opened: dict[str, object] = {}
 
@@ -188,21 +217,19 @@ def test_midi_callback_sends_osc(monkeypatch: pytest.MonkeyPatch) -> None:
         port_name="IAC",
         osc_ip="127.0.0.1",
         osc_port=8000,
-        mappings={("note_on", 0, 60): OscMapping("/clip/start")},
+        mappings={MappingKey("note_on", 0, 60): OscMapping("/clip/start")},
         reconnect=False,
         client_factory=lambda ip, port: client,
         open_input=open_input,
         list_inputs=lambda: ["IAC"],
     )
     try:
-        deadline = time.monotonic() + 2.0
-        while "port" not in opened and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert "port" in opened
+        _wait_until(lambda: "port" in opened)
         assert opened["virtual"] is False
         port = opened["port"]
         assert isinstance(port, _FakeMidiPort)
         port.callback(SimpleNamespace(type="note_on", channel=0, note=60, velocity=100))
+        _wait_until(lambda: client.send_message.called)
         client.send_message.assert_called_once_with("/clip/start", 100)
     finally:
         stop.set()
@@ -212,6 +239,7 @@ def test_midi_callback_sends_osc(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_mute_event_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.QUEUE_POLL_S", 0.01)
     client = MagicMock()
     mute = threading.Event()
     mute.set()
@@ -226,7 +254,7 @@ def test_mute_event_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
         port_name="IAC",
         osc_ip="127.0.0.1",
         osc_port=8000,
-        mappings={("note_on", 0, 60): OscMapping("/clip/start")},
+        mappings={MappingKey("note_on", 0, 60): OscMapping("/clip/start")},
         reconnect=False,
         mute_event=mute,
         client_factory=lambda ip, port: client,
@@ -234,19 +262,19 @@ def test_mute_event_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
         list_inputs=lambda: ["IAC"],
     )
     try:
-        deadline = time.monotonic() + 2.0
-        while "port" not in opened and time.monotonic() < deadline:
-            time.sleep(0.01)
+        _wait_until(lambda: "port" in opened)
         port = opened["port"]
         assert isinstance(port, _FakeMidiPort)
 
         msg = SimpleNamespace(type="note_on", channel=0, note=60, velocity=100)
         port.callback(msg)
+        time.sleep(0.08)
         client.send_message.assert_not_called()
 
         # Unmuting takes effect without reopening the port.
         mute.clear()
         port.callback(msg)
+        _wait_until(lambda: client.send_message.called)
         client.send_message.assert_called_once_with("/clip/start", 100)
     finally:
         stop.set()
@@ -258,7 +286,7 @@ def test_virtual_port_opens_without_resolving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
-    monkeypatch.setattr("midi2osc.converter.sys.platform", "darwin")
+    monkeypatch.setattr("midi2osc.ports.sys.platform", "darwin")
     opened: dict[str, object] = {}
 
     def open_input(name: str, callback=None, *, virtual: bool = False) -> _FakeMidiPort:
@@ -278,9 +306,7 @@ def test_virtual_port_opens_without_resolving(
         list_inputs=lambda: [],  # must not be consulted for name resolution
     )
     try:
-        deadline = time.monotonic() + 2.0
-        while "name" not in opened and time.monotonic() < deadline:
-            time.sleep(0.01)
+        _wait_until(lambda: "name" in opened)
         assert opened["name"] == "MIDI2OSC Bridge"
         assert opened["virtual"] is True
     finally:
@@ -290,7 +316,7 @@ def test_virtual_port_opens_without_resolving(
 
 
 def test_virtual_port_rejected_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("midi2osc.converter.sys.platform", "win32")
+    monkeypatch.setattr("midi2osc.ports.sys.platform", "win32")
     with pytest.raises(MidiPortError, match="not supported on Windows"):
         run_converter(
             port_name="MIDI2OSC Bridge",
@@ -307,6 +333,7 @@ def test_callback_reconnects_when_port_disappears(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.QUEUE_POLL_S", 0.01)
     monkeypatch.setattr("midi2osc.converter.RECONNECT_WAIT_S", 0.05)
     opens = 0
     disconnected = False
@@ -334,9 +361,7 @@ def test_callback_reconnects_when_port_disappears(
         list_inputs=list_inputs,
     )
     try:
-        deadline = time.monotonic() + 2.0
-        while opens < 2 and time.monotonic() < deadline:
-            time.sleep(0.01)
+        _wait_until(lambda: opens >= 2)
         assert opens >= 2
     finally:
         stop.set()
