@@ -103,6 +103,36 @@ def test_cc_and_program_defaults() -> None:
     assert pc.value == 5
 
 
+def test_channel_filter_drops_other_channels() -> None:
+    listen = frozenset({4})
+    on_channel = route_midi_message(
+        SimpleNamespace(type="control_change", channel=4, control=7, value=64),
+        {},
+        True,
+        listen,
+    )
+    off_channel = route_midi_message(
+        SimpleNamespace(type="control_change", channel=0, control=7, value=64),
+        {},
+        True,
+        listen,
+    )
+    assert on_channel is not None
+    assert on_channel.osc_address == "/midi/channel/5/cc/7"
+    assert off_channel is None
+
+
+def test_channel_filter_always_passes_sysex() -> None:
+    routed = route_midi_message(
+        SimpleNamespace(type="sysex", data=[1, 2, 3]),
+        {},
+        True,
+        frozenset({4}),
+    )
+    assert routed is not None
+    assert routed.osc_address == "/midi/sysex"
+
+
 def test_resolve_exact_and_case_insensitive() -> None:
     ports = ["IAC Driver Bus 1", "Launchpad Mini"]
     assert resolve_midi_port("IAC Driver Bus 1", ports) == "IAC Driver Bus 1"
@@ -327,6 +357,49 @@ def test_virtual_port_rejected_on_windows(monkeypatch: pytest.MonkeyPatch) -> No
             reconnect=False,
             list_inputs=lambda: [],
         )
+
+
+def test_channel_filter_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.QUEUE_POLL_S", 0.01)
+    client = MagicMock()
+    opened: dict[str, object] = {}
+
+    def open_input(name: str, callback=None, *, virtual: bool = False) -> _FakeMidiPort:
+        port = _FakeMidiPort(callback=callback)
+        opened["port"] = port
+        return port
+
+    stop, thread = _start_converter(
+        port_name="IAC",
+        osc_ip="127.0.0.1",
+        osc_port=8000,
+        mappings={
+            MappingKey("note_on", 0, 60): OscMapping("/ch1"),
+            MappingKey("note_on", 1, 60): OscMapping("/ch2"),
+        },
+        reconnect=False,
+        listen_channels=frozenset({1}),
+        client_factory=lambda ip, port: client,
+        open_input=open_input,
+        list_inputs=lambda: ["IAC"],
+    )
+    try:
+        _wait_until(lambda: "port" in opened)
+        port = opened["port"]
+        assert isinstance(port, _FakeMidiPort)
+
+        port.callback(SimpleNamespace(type="note_on", channel=0, note=60, velocity=100))
+        time.sleep(0.08)
+        client.send_message.assert_not_called()
+
+        port.callback(SimpleNamespace(type="note_on", channel=1, note=60, velocity=100))
+        _wait_until(lambda: client.send_message.called)
+        client.send_message.assert_called_once_with("/ch2", 100)
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
 
 
 def test_callback_reconnects_when_port_disappears(

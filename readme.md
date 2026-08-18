@@ -11,6 +11,7 @@ Designed for live performances, stage automation, and media software such as Res
 - Optional value expressions (`v/127`, static ints, strings) for OSC payloads
 - Native integer OSC arguments for velocity and CC values (`0–127`) when no expression is set
 - Fallback routing for unmapped messages (e.g. `/midi/channel/1/note_on`)
+- Channel filter (`channel = all`, `channel = 5`, `channel = 1-4,16`) to ignore everything on other MIDI channels
 - Automatic reconnect when a MIDI device drops
 - Mute OSC output at runtime (`--mute` in the CLI, toggle button in the GUI) for safe local testing
 - Optional virtual MIDI input (`virtual = true`) on macOS/Linux; Windows users can use loopMIDI
@@ -103,6 +104,7 @@ midi2osc example
 
 midi_port = "MIDI2OSC Bridge"
 virtual = true
+channel = all
 ip = "127.0.0.1"
 port = 8000
 convert_unmapped = true
@@ -123,6 +125,27 @@ pc 1 1 -> /qlab/cue/2/start
 | `ip` / `host` | Target OSC IP (default `127.0.0.1`) |
 | `port` / `osc_port` | Target OSC UDP port (default `7700`) |
 | `convert_unmapped` | If `true`, unmapped messages are sent to `/midi/...` defaults; if `false`, they are only logged |
+| `channel` / `channels` / `midi_channel` | MIDI channel(s) to listen on (default `all`) |
+
+### Listening on specific channels
+
+By default every channel `1–16` is processed. Set `channel` to listen to a subset — anything on the other channels is discarded before mapping, fallback routing, and logging.
+
+```
+channel = all        # every channel (default)
+channel = 5          # only channel 5
+channel = 1,3,9      # a few channels
+channel = 1-4, 16    # ranges and single channels combined
+```
+
+SysEx has no channel, so it is always passed through. If a mapping targets a channel you are not listening on, a warning is logged when the config loads.
+
+The CLI can override the file setting:
+
+```bash
+midi2osc run show.mapping.txt --channel 5
+midi2osc run show.mapping.txt --channel 1-4,16
+```
 
 ### Mapping syntax
 
@@ -154,6 +177,7 @@ Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no
 
 ```bash
 midi2osc run show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
+midi2osc run show.mapping.txt --channel 5
 midi2osc run show.mapping.txt --quiet
 midi2osc run show.mapping.txt --no-reconnect
 midi2osc run show.mapping.txt --mute

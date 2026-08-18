@@ -25,6 +25,78 @@ class MappingKey(NamedTuple):
     number: Optional[int]
 
 
+# 0-based to match mido's msg.channel
+ALL_CHANNELS: frozenset[int] = frozenset(range(16))
+
+_ALL_CHANNEL_TOKENS = ("all", "any", "omni", "*")
+
+
+def _channel_number(text: str) -> int:
+    """Parse a single 1-16 channel number."""
+    token = text.strip()
+    try:
+        number = int(token)
+    except ValueError:
+        raise ValueError(f"channel must be a number 1-16 (got {token!r})") from None
+    if not (1 <= number <= 16):
+        raise ValueError(f"channel must be 1-16 (got {number})")
+    return number
+
+
+def parse_channel_spec(value: str) -> frozenset[int]:
+    """Parse a listen-channel spec into a set of 0-based channels.
+
+    Accepts ``all`` (or ``any`` / ``omni`` / ``*``), a single channel, and
+    comma-separated numbers and ranges: ``5``, ``1,5,9``, ``1-4, 16``.
+    Raises ``ValueError`` for anything outside 1-16 or malformed input.
+    """
+    text = value.strip().lower()
+    if not text:
+        raise ValueError("empty channel value")
+    if text in _ALL_CHANNEL_TOKENS:
+        return ALL_CHANNELS
+
+    channels: set[int] = set()
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
+            raise ValueError(f"empty channel entry in {value.strip()!r}")
+        if "-" in item:
+            start_text, _, end_text = item.partition("-")
+            start = _channel_number(start_text)
+            end = _channel_number(end_text)
+            if start > end:
+                raise ValueError(f"invalid channel range {item!r}")
+            channels.update(range(start - 1, end))
+        else:
+            channels.add(_channel_number(item) - 1)
+    return frozenset(channels)
+
+
+def format_channels(channels: frozenset[int]) -> str:
+    """Render 0-based channels as a 1-based summary: ``all`` or ``1, 3, 5-8``."""
+    if channels == ALL_CHANNELS:
+        return "all"
+    if not channels:
+        return "none"
+
+    numbers = sorted(channel + 1 for channel in channels)
+    groups: list[str] = []
+    start = previous = numbers[0]
+
+    def flush() -> None:
+        groups.append(str(start) if start == previous else f"{start}-{previous}")
+
+    for number in numbers[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        flush()
+        start = previous = number
+    flush()
+    return ", ".join(groups)
+
+
 EXAMPLE_CONFIG = """# midi2osc Configuration File Example
 # -----------------------------------------------
 # Channels are 1-16 (same numbering as most DAWs / controllers).
@@ -37,6 +109,14 @@ midi_port = "MIDI2OSC Bridge"
 # macOS/Linux: mido creates the port so DAWs can send MIDI into this app.
 # Windows: not supported — use loopMIDI (or similar) and set virtual = false.
 virtual = true
+
+# Which MIDI channel(s) to listen on (default: all)
+#   all        -> every channel 1-16
+#   5          -> only channel 5
+#   1,3,9      -> a few channels
+#   1-4, 16    -> ranges and single channels can be combined
+# Messages on other channels are ignored. SysEx has no channel and always passes.
+channel = all
 
 # Target OSC Destination
 ip = "127.0.0.1"
@@ -100,6 +180,7 @@ class AppConfig:
     midi_port: str = ""
     convert_unmapped: bool = True
     virtual: bool = False
+    listen_channels: frozenset[int] = ALL_CHANNELS
     mappings: dict[MappingKey, OscMapping] = field(default_factory=dict)
 
     def with_overrides(
@@ -110,6 +191,7 @@ class AppConfig:
         midi_port: Optional[str] = None,
         convert_unmapped: Optional[bool] = None,
         virtual: Optional[bool] = None,
+        listen_channels: Optional[frozenset[int]] = None,
     ) -> AppConfig:
         """Return a copy with optional CLI/runtime overrides applied."""
         return AppConfig(
@@ -122,6 +204,9 @@ class AppConfig:
                 else self.convert_unmapped
             ),
             virtual=virtual if virtual is not None else self.virtual,
+            listen_channels=(
+                listen_channels if listen_channels is not None else self.listen_channels
+            ),
             mappings=dict(self.mappings),
         )
 
@@ -230,6 +315,19 @@ def parse_config(config_path: Path) -> AppConfig:
                     config.convert_unmapped = val.lower() in ("true", "1", "yes", "on")
                 elif key in ("virtual", "virtual_port", "create_virtual"):
                     config.virtual = val.lower() in ("true", "1", "yes", "on")
+                elif key in (
+                    "channel",
+                    "channels",
+                    "listen_channel",
+                    "listen_channels",
+                    "midi_channel",
+                    "midi_channels",
+                ):
+                    try:
+                        config.listen_channels = parse_channel_spec(val)
+                    except ValueError as exc:
+                        warn("Line %s: %s", line_no, exc)
+                        continue
                 else:
                     warn("Line %s: unknown setting '%s'", line_no, key)
 
@@ -297,5 +395,19 @@ def parse_config(config_path: Path) -> AppConfig:
 
     if ignored:
         logger.warning("Config parsed with %s ignored line(s)", ignored)
+
+    unreachable = sorted(
+        {
+            key.channel + 1
+            for key in config.mappings
+            if key.channel is not None and key.channel not in config.listen_channels
+        }
+    )
+    if unreachable:
+        logger.warning(
+            "Mappings on channel %s can never trigger; listening on channel %s",
+            ", ".join(str(channel) for channel in unreachable),
+            format_channels(config.listen_channels),
+        )
 
     return config

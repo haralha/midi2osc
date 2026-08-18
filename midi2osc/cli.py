@@ -11,7 +11,12 @@ import mido
 import typer
 from rich import print
 
-from midi2osc.config import EXAMPLE_CONFIG, example_config_text, parse_config
+from midi2osc.config import (
+    EXAMPLE_CONFIG,
+    example_config_text,
+    parse_channel_spec,
+    parse_config,
+)
 from midi2osc.converter import MidiPortError, run_from_config
 from midi2osc.logging_utils import log_status, setup_logging
 
@@ -79,6 +84,11 @@ def run(
     midi_port: Optional[str] = typer.Option(
         None, "--midi-port", help="Override MIDI port name"
     ),
+    channel: Optional[str] = typer.Option(
+        None,
+        "--channel",
+        help="Override listen channel(s): all, 5, 1,3,9 or 1-4,16",
+    ),
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Only log warnings and errors"
     ),
@@ -96,6 +106,14 @@ def run(
     """Run MIDI to OSC conversion with the given configuration file."""
     setup_logging(level=logging.WARNING if quiet else logging.INFO, color=True)
 
+    listen_channels = None
+    if channel is not None:
+        try:
+            listen_channels = parse_channel_spec(channel)
+        except ValueError as exc:
+            logger.error("✖ Invalid --channel value: %s", exc)
+            raise typer.Exit(code=1)
+
     mute_event = threading.Event()
     if mute:
         mute_event.set()
@@ -109,6 +127,7 @@ def run(
             ip=ip,
             port=port,
             midi_port=midi_port,
+            listen_channels=listen_channels,
         )
 
         log_status("Active config: %s", config_path.name)

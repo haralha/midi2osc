@@ -2,7 +2,17 @@
 
 from pathlib import Path
 
-from midi2osc.config import MappingKey, OscMapping, example_config_text, parse_config
+import pytest
+
+from midi2osc.config import (
+    ALL_CHANNELS,
+    MappingKey,
+    OscMapping,
+    example_config_text,
+    format_channels,
+    parse_channel_spec,
+    parse_config,
+)
 
 
 def test_parse_basic_settings_and_mappings(tmp_path: Path) -> None:
@@ -138,13 +148,94 @@ def test_with_overrides() -> None:
         convert_unmapped=False,
         virtual=True,
     )
-    updated = base.with_overrides(ip="2.2.2.2", midi_port="B", virtual=False)
+    updated = base.with_overrides(
+        ip="2.2.2.2",
+        midi_port="B",
+        virtual=False,
+        listen_channels=frozenset({3}),
+    )
     assert updated.ip == "2.2.2.2"
     assert updated.port == 1
     assert updated.midi_port == "B"
     assert updated.convert_unmapped is False
     assert updated.virtual is False
+    assert updated.listen_channels == frozenset({3})
     assert base.virtual is True
+    assert base.listen_channels == ALL_CHANNELS
+
+
+def test_listen_channels_default_to_all(tmp_path: Path) -> None:
+    path = tmp_path / "no-channel.mapping.txt"
+    path.write_text("cc 1 7 -> /volume\n", encoding="utf-8")
+    assert parse_config(path).listen_channels == ALL_CHANNELS
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("all", ALL_CHANNELS),
+        ("ALL", ALL_CHANNELS),
+        ("*", ALL_CHANNELS),
+        ("5", {4}),
+        ("1,3,9", {0, 2, 8}),
+        ("1-4, 16", {0, 1, 2, 3, 15}),
+        ("2-2", {1}),
+    ],
+)
+def test_parse_channel_spec(spec: str, expected: set[int]) -> None:
+    assert parse_channel_spec(spec) == frozenset(expected)
+
+
+@pytest.mark.parametrize("spec", ["", "0", "17", "abc", "4-2", "1,,2", "1-"])
+def test_parse_channel_spec_rejects_invalid(spec: str) -> None:
+    with pytest.raises(ValueError):
+        parse_channel_spec(spec)
+
+
+def test_channel_setting_is_parsed(tmp_path: Path) -> None:
+    path = tmp_path / "channel.mapping.txt"
+    path.write_text("channel = 1-3, 10\ncc 1 7 -> /volume\n", encoding="utf-8")
+    assert parse_config(path).listen_channels == frozenset({0, 1, 2, 9})
+
+
+def test_channel_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "channel-alias.mapping.txt"
+    path.write_text("midi_channel: 5\n", encoding="utf-8")
+    assert parse_config(path).listen_channels == frozenset({4})
+
+
+def test_invalid_channel_setting_keeps_all(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "bad-channel.mapping.txt"
+    path.write_text("channel = 20\n", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        cfg = parse_config(path)
+    assert cfg.listen_channels == ALL_CHANNELS
+    assert any("channel must be 1-16" in rec.getMessage() for rec in caplog.records)
+
+
+def test_warns_about_mappings_outside_listen_channels(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "unreachable.mapping.txt"
+    path.write_text(
+        "channel = 1\ncc 1 7 -> /volume\ncc 4 7 -> /other\nsysex -> /midi/sysex\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        cfg = parse_config(path)
+    assert len(cfg.mappings) == 3
+    assert any("can never trigger" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("channels", "expected"),
+    [
+        (ALL_CHANNELS, "all"),
+        (frozenset(), "none"),
+        (frozenset({4}), "5"),
+        (frozenset({0, 2, 4, 5, 6, 7}), "1, 3, 5-8"),
+    ],
+)
+def test_format_channels(channels: frozenset[int], expected: str) -> None:
+    assert format_channels(channels) == expected
 
 
 def test_ignored_lines_are_summarized(tmp_path: Path, caplog) -> None:

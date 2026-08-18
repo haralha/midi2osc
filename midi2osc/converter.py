@@ -13,7 +13,14 @@ from typing import Any, Callable, Optional, Union
 import mido
 from pythonosc import udp_client
 
-from midi2osc.config import AppConfig, MappingKey, OscMapping, parse_config
+from midi2osc.config import (
+    ALL_CHANNELS,
+    AppConfig,
+    MappingKey,
+    OscMapping,
+    format_channels,
+    parse_config,
+)
 from midi2osc.expr import ExprError, eval_value_expr
 from midi2osc.logging_utils import build_routed_tokens, log_status
 from midi2osc.ports import (
@@ -156,10 +163,18 @@ def route_midi_message(
     msg: Any,
     mappings: dict[MappingKey, OscMapping],
     convert_unmapped: bool = True,
+    listen_channels: frozenset[int] = ALL_CHANNELS,
 ) -> Optional[RoutedMessage]:
-    """Map a mido-like message to an OSC route, or None if unsupported."""
+    """Map a mido-like message to an OSC route, or None if unsupported.
+
+    Messages on a channel outside ``listen_channels`` (0-based) return None and
+    are dropped. SysEx carries no channel and is always routed.
+    """
     decoded = _decode_midi(msg)
     if decoded is None:
+        return None
+
+    if decoded.channel is not None and decoded.channel not in listen_channels:
         return None
 
     key = MappingKey(decoded.lookup_type, decoded.channel, decoded.number)
@@ -230,8 +245,9 @@ def _dispatch_message(
     client: Any,
     osc_stats: _OscSendStats,
     muted: bool = False,
+    listen_channels: frozenset[int] = ALL_CHANNELS,
 ) -> None:
-    routed = route_midi_message(msg, mappings, convert_unmapped)
+    routed = route_midi_message(msg, mappings, convert_unmapped, listen_channels)
     if routed is None:
         return
 
@@ -272,6 +288,7 @@ def run_converter(
     *,
     virtual: bool = False,
     reconnect: bool = True,
+    listen_channels: frozenset[int] = ALL_CHANNELS,
     mute_event: Optional[threading.Event] = None,
     client_factory: Optional[Callable[[str, int], Any]] = None,
     open_input: Optional[Callable[..., Any]] = None,
@@ -288,6 +305,9 @@ def run_converter(
     When ``virtual`` is True (macOS/Linux), a virtual MIDI input named
     ``port_name`` is created so other apps can send into this process.
     Windows rejects virtual mode with ``MidiPortConfigError``.
+
+    ``listen_channels`` holds the 0-based MIDI channels to accept; messages on
+    any other channel are dropped without logging. Defaults to all 16.
 
     While ``mute_event`` is set, messages are still routed and logged but no
     OSC packets are sent. The event is read per message, so it can be toggled
@@ -362,6 +382,7 @@ def run_converter(
                         client,
                         osc_stats,
                         muted,
+                        listen_channels,
                     )
 
         except MidiPortConfigError:
@@ -405,6 +426,7 @@ def run_from_config(
     log_status("Target OSC: %s:%s", config.ip, config.port)
     log_status("Convert unmapped: %s", config.convert_unmapped)
     log_status("Virtual MIDI port: %s", config.virtual)
+    log_status("Listening on MIDI channel: %s", format_channels(config.listen_channels))
     log_status("Mappings loaded: %s", len(config.mappings))
     log_status(
         "OSC output: %s",
@@ -420,6 +442,7 @@ def run_from_config(
         convert_unmapped=config.convert_unmapped,
         virtual=config.virtual,
         reconnect=reconnect,
+        listen_channels=config.listen_channels,
         mute_event=mute_event,
     )
 
