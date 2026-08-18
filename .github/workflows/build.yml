@@ -80,6 +80,16 @@ jobs:
         if: matrix.is_mac == false
         run: poetry run poe build
 
+      - name: Smoke test CLI (macOS / Linux)
+        if: matrix.os != 'windows-latest'
+        run: |
+          chmod +x bin/midi2osc
+          ./bin/midi2osc --help
+
+      - name: Smoke test CLI (Windows)
+        if: matrix.os == 'windows-latest'
+        run: .\bin\midi2osc.exe --help
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
