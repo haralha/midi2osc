@@ -188,4 +188,4 @@ The icon lives in `midi2osc/assets/`: `icon.png` (1024x1024 master, also used fo
 
 ## License
 
-Distributed under the MIT License. See LICENSE for details.
+Distributed under the MIT License.
