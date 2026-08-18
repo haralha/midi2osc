@@ -1,5 +1,7 @@
 # MIDI to OSC Converter
 
+![MIDI2OSC GUI](docs/screenshot.png)
+
 A lightweight GUI and CLI application that converts incoming MIDI messages (`Note On/Off`, `Control Change`, `Program Change`, SysEx) into OSC packets over UDP.
 
 Designed for live performances, stage automation, and media software such as Resolume, QLab, TouchDesigner, and Ableton Live.
@@ -19,16 +21,27 @@ Designed for live performances, stage automation, and media software such as Res
 
 ## Prerequisites
 
-- **Python 3.11** (3.12+ is not supported; the GUI is pinned to PySide6 6.4 for older macOS)
-- **pipx** (recommended for standalone installation) or **Poetry** (for local development)
+- **For pre-built binaries:** None! Just download and run.
+- **For CLI/pipx installation:** Python 3.11 (3.12+ is not supported; the GUI is pinned to PySide6 6.4 for older macOS) and `pipx`.
+- **For local development:** Python 3.11 and Poetry.
 
 ---
 
-## Installation via `pipx` (Recommended)
+## Installation
 
-`pipx` installs the application into an isolated environment and exposes the commands globally.
+### Option 1: Download Pre-built Binaries (Recommended)
 
-### 1. Install `pipx`
+For most users (especially for live production), the easiest way to run the app is to download the standalone executable. You do not need to install Python.
+
+1. Go to the [Releases](https://github.com/haralha/midi2osc/releases) page on GitHub.
+2. Download the latest version for your operating system (macOS `.app` or Windows `.exe`).
+3. Extract and run the application.
+
+### Option 2: Install via `pipx` (For CLI users & Python developers)
+
+If you prefer using the command line or want to install it as a global Python tool, `pipx` installs the application into an isolated environment and exposes the commands globally.
+
+#### 1. Install `pipx`
 
 **On macOS (via Homebrew):**
 ```bash
@@ -43,7 +56,7 @@ python3 -m pipx ensurepath
 ```
 (Restart your terminal after running `ensurepath`.)
 
-### 2. Install midi2osc
+#### 2. Install midi2osc
 
 From GitHub:
 ```bash
@@ -57,7 +70,7 @@ cd midi2osc
 pipx install .
 ```
 
-### 3. Usage via pipx
+#### 3. Usage via pipx
 
 ```bash
 midi2osc-gui                    # GUI
@@ -210,6 +223,8 @@ Binaries are written to `bin/`.
 
 The icon lives in `midi2osc/assets/`: `icon.png` (1024x1024 master, also used for the Qt window/taskbar icon at runtime), `icon.icns` for the macOS `.app` bundle, and `icon.ico` for the Windows `.exe`. The build tasks pass the platform-specific file via `--icon` and bundle the PNG with `--add-data`. To change the icon, replace the PNG master and regenerate the `.icns` and `.ico` from it.
 
-## License
+## Troubleshooting
 
-Distributed under the MIT License.
+- **"MIDI port unavailable / ambiguous"**: Ensure the `midi_port` in your config exactly matches (or is a unique substring of) the device name. Run `midi2osc list` in the CLI to see available names.
+- **Windows Virtual Ports**: Windows does not natively support creating virtual MIDI ports. Set `virtual = false` in your config and use a third-party tool like [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) to route MIDI between applications.
+- **No OSC received**: Check that your target software (Resolume, QLab) is listening on the same UDP port configured in your `*.mapping.txt` file (default `7700`).
