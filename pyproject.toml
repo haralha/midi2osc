@@ -1,6 +1,6 @@
 [project]
 name = "midi2osc"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "Converts incoming MIDI events to OSC commands"
 authors = []
 readme = "readme.md"
