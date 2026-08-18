@@ -95,7 +95,18 @@ def open_mido_input(
     *,
     virtual: bool = False,
 ) -> Any:
-    return mido.open_input(name, callback=callback, virtual=virtual)
+    """Open a MIDI input, optionally creating a virtual port named ``name``.
+
+    For virtual ports ``client_name`` is set too, so hosts that display the
+    ALSA/CoreMIDI client rather than the port show ``name`` instead of
+    rtmidi's default ("RtMidiIn Client"). mido forces virtual mode whenever
+    ``client_name`` is passed, so it is only sent for virtual ports.
+    """
+    if virtual:
+        return mido.open_input(
+            name, callback=callback, virtual=True, client_name=name
+        )
+    return mido.open_input(name, callback=callback)
 
 
 def resolve_listen_port(

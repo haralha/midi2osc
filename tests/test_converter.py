@@ -9,6 +9,7 @@ import pytest
 
 from midi2osc.config import MappingKey, OscMapping
 from midi2osc.converter import MidiPortError, resolve_midi_port, route_midi_message, run_converter
+from midi2osc.ports import open_mido_input
 
 
 def test_note_on_velocity_zero_becomes_note_off_default() -> None:
@@ -158,6 +159,40 @@ def test_resolve_missing() -> None:
 def test_resolve_missing_includes_config_hint() -> None:
     with pytest.raises(MidiPortError, match="Update midi_port"):
         resolve_midi_port("Nope", ["IAC Driver Bus 1"])
+
+
+def test_virtual_port_names_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_open_input(name: str, **kwargs: object) -> object:
+        captured["name"] = name
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("midi2osc.ports.mido.open_input", fake_open_input)
+    open_mido_input("MIDI2OSC Bridge", virtual=True)
+
+    # Hosts that show the ALSA/CoreMIDI client name must see the port name,
+    # not rtmidi's default "RtMidiIn Client".
+    assert captured["name"] == "MIDI2OSC Bridge"
+    assert captured["client_name"] == "MIDI2OSC Bridge"
+    assert captured["virtual"] is True
+
+
+def test_non_virtual_port_omits_client_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_open_input(name: str, **kwargs: object) -> object:
+        captured["name"] = name
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("midi2osc.ports.mido.open_input", fake_open_input)
+    open_mido_input("IAC Driver Bus 1")
+
+    # mido turns any open with client_name into a virtual port.
+    assert "client_name" not in captured
+    assert "virtual" not in captured
 
 
 def test_unknown_port_does_not_reconnect() -> None:

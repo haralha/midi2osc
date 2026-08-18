@@ -228,3 +228,25 @@ The icon lives in `midi2osc/assets/`: `icon.png` (1024x1024 master, also used fo
 - **"MIDI port unavailable / ambiguous"**: Ensure the `midi_port` in your config exactly matches (or is a unique substring of) the device name. Run `midi2osc list` in the CLI to see available names.
 - **Windows Virtual Ports**: Windows does not natively support creating virtual MIDI ports. Set `virtual = false` in your config and use a third-party tool like [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) to route MIDI between applications.
 - **No OSC received**: Check that your target software (Resolume, QLab) is listening on the same UDP port configured in your `*.mapping.txt` file (default `7700`).
+- **The virtual port only exists while midi2osc runs.** Start midi2osc first, then rescan devices in the sending application (in REAPER: Preferences → Audio → MIDI Devices → *Reset all MIDI devices*). The port appears in the sender's **MIDI outputs** list, never its inputs — the sender writes to it, midi2osc reads.
+
+### Virtual ports on Linux (ALSA)
+
+`virtual = true` creates an ALSA **sequencer** port. Most Linux MIDI software finds it, but some hosts — REAPER among them — enumerate only ALSA **rawmidi** hardware devices and will never list a sequencer port. A quick way to tell: if the host does not show the always-present `Midi Through` device, it is rawmidi-only.
+
+No userspace program can create a rawmidi device, so this cannot be solved from inside midi2osc. Load the kernel's virtual MIDI module instead, which provides devices visible to both worlds:
+
+```bash
+sudo modprobe snd-virmidi
+aplaymidi -l                 # should now list "Virtual Raw MIDI 1-0" … "1-3"
+echo snd-virmidi | sudo tee /etc/modules-load.d/snd-virmidi.conf   # load at boot
+```
+
+Then stop creating your own port and attach to virmidi instead:
+
+```
+virtual = false
+midi_port = "Virtual Raw MIDI 1-0"
+```
+
+Point the sending application at the same virmidi device. It writes to the rawmidi side, midi2osc reads the sequencer side of the same port — so both must use the *same* number (`1-0` in both places, not `1-0` and `1-1`).
