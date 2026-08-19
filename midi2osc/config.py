@@ -97,6 +97,78 @@ def format_channels(channels: frozenset[int]) -> str:
     return ", ".join(groups)
 
 
+# Wire-level MIDI message types, i.e. note_on/note_off stay distinct here even
+# though mappings share one bucket for them.
+ALL_EVENTS: frozenset[str] = frozenset(
+    {"note_on", "note_off", "control_change", "program_change", "sysex"}
+)
+
+_ALL_EVENT_TOKENS = ("all", "any", "*")
+
+_EVENT_ALIASES: dict[str, frozenset[str]] = {
+    "note": frozenset({"note_on", "note_off"}),
+    "notes": frozenset({"note_on", "note_off"}),
+    "note_on": frozenset({"note_on"}),
+    "noteon": frozenset({"note_on"}),
+    "note_off": frozenset({"note_off"}),
+    "noteoff": frozenset({"note_off"}),
+    "cc": frozenset({"control_change"}),
+    "control": frozenset({"control_change"}),
+    "control_change": frozenset({"control_change"}),
+    "pc": frozenset({"program_change"}),
+    "program": frozenset({"program_change"}),
+    "program_change": frozenset({"program_change"}),
+    "sysex": frozenset({"sysex"}),
+}
+
+# Display order and short labels, so log output is stable and readable.
+_EVENT_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("note_on", "note_on"),
+    ("note_off", "note_off"),
+    ("control_change", "cc"),
+    ("program_change", "pc"),
+    ("sysex", "sysex"),
+)
+
+
+def parse_event_spec(value: str) -> frozenset[str]:
+    """Parse a listen-event spec into a set of wire-level message types.
+
+    Accepts ``all`` (or ``any`` / ``*``) and comma-separated event names using
+    the same aliases as mapping lines: ``note`` (both on and off), ``note_on``,
+    ``note_off``, ``cc``, ``pc`` and ``sysex``. Raises ``ValueError`` on
+    unknown or malformed input.
+    """
+    text = value.strip().lower()
+    if not text:
+        raise ValueError("empty event value")
+    if text in _ALL_EVENT_TOKENS:
+        return ALL_EVENTS
+
+    events: set[str] = set()
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
+            raise ValueError(f"empty event entry in {value.strip()!r}")
+        try:
+            events.update(_EVENT_ALIASES[item])
+        except KeyError:
+            known = ", ".join(sorted(_EVENT_ALIASES))
+            raise ValueError(
+                f"unknown event {item!r} (expected all or one of: {known})"
+            ) from None
+    return frozenset(events)
+
+
+def format_events(events: frozenset[str]) -> str:
+    """Render event types as a summary: ``all``, ``none`` or ``note_on, cc``."""
+    if events == ALL_EVENTS:
+        return "all"
+    if not events:
+        return "none"
+    return ", ".join(label for event, label in _EVENT_DISPLAY if event in events)
+
+
 EXAMPLE_CONFIG = """# midi2osc Configuration File Example
 # -----------------------------------------------
 # Channels are 1-16 (same numbering as most DAWs / controllers).
@@ -120,6 +192,17 @@ virtual = true
 #   1-4, 16    -> ranges and single channels can be combined
 # Messages on other channels are ignored. SysEx has no channel and always passes.
 channel = all
+
+# Which MIDI event type(s) to listen for (default: all)
+#   all              -> every supported type
+#   note             -> note on and note off
+#   note_on/note_off -> selectable independently
+#   cc               -> control_change
+#   pc               -> program_change
+#   sysex            -> system exclusive
+#   note_on, cc      -> combine with commas
+# Other event types are ignored before mapping and logging.
+events = all
 
 # Target OSC Destination
 ip = "127.0.0.1"
@@ -184,6 +267,7 @@ class AppConfig:
     convert_unmapped: bool = True
     virtual: bool = False
     listen_channels: frozenset[int] = ALL_CHANNELS
+    listen_events: frozenset[str] = ALL_EVENTS
     mappings: dict[MappingKey, OscMapping] = field(default_factory=dict)
 
     def with_overrides(
@@ -195,6 +279,7 @@ class AppConfig:
         convert_unmapped: Optional[bool] = None,
         virtual: Optional[bool] = None,
         listen_channels: Optional[frozenset[int]] = None,
+        listen_events: Optional[frozenset[str]] = None,
     ) -> AppConfig:
         """Return a copy with optional CLI/runtime overrides applied."""
         return AppConfig(
@@ -209,6 +294,9 @@ class AppConfig:
             virtual=virtual if virtual is not None else self.virtual,
             listen_channels=(
                 listen_channels if listen_channels is not None else self.listen_channels
+            ),
+            listen_events=(
+                listen_events if listen_events is not None else self.listen_events
             ),
             mappings=dict(self.mappings),
         )
@@ -228,6 +316,13 @@ def _normalize_msg_type(raw: str) -> str:
     if token == "sysex":
         return "sysex"
     return token
+
+
+def _covered_events(msg_type: str) -> frozenset[str]:
+    """Wire-level events a mapping bucket can be triggered by."""
+    if msg_type == "note_on":
+        return frozenset({"note_on", "note_off"})
+    return frozenset({msg_type})
 
 
 def _parse_osc_rhs(
@@ -331,6 +426,18 @@ def parse_config(config_path: Path) -> AppConfig:
                     except ValueError as exc:
                         warn("Line %s: %s", line_no, exc)
                         continue
+                elif key in (
+                    "events",
+                    "event",
+                    "messages",
+                    "message_types",
+                    "types",
+                ):
+                    try:
+                        config.listen_events = parse_event_spec(val)
+                    except ValueError as exc:
+                        warn("Line %s: %s", line_no, exc)
+                        continue
                 else:
                     warn("Line %s: unknown setting '%s'", line_no, key)
 
@@ -411,6 +518,20 @@ def parse_config(config_path: Path) -> AppConfig:
             "Mappings on channel %s can never trigger; listening on channel %s",
             ", ".join(str(channel) for channel in unreachable),
             format_channels(config.listen_channels),
+        )
+
+    filtered_types = sorted(
+        {
+            key.msg_type
+            for key in config.mappings
+            if not (_covered_events(key.msg_type) & config.listen_events)
+        }
+    )
+    if filtered_types:
+        logger.warning(
+            "Mappings for %s can never trigger; listening for events %s",
+            ", ".join(filtered_types),
+            format_events(config.listen_events),
         )
 
     return config

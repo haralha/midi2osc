@@ -16,6 +16,7 @@ from midi2osc.config import (
     example_config_text,
     parse_channel_spec,
     parse_config,
+    parse_event_spec,
 )
 from midi2osc.converter import MidiPortError, run_from_config
 from midi2osc.logging_utils import log_status, setup_logging
@@ -89,6 +90,11 @@ def run(
         "--channel",
         help="Override listen channel(s): all, 5, 1,3,9 or 1-4,16",
     ),
+    events: Optional[str] = typer.Option(
+        None,
+        "--events",
+        help="Override event type(s): all, note, note_on, note_off, cc, pc, sysex",
+    ),
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Only log warnings and errors"
     ),
@@ -114,6 +120,14 @@ def run(
             logger.error("✖ Invalid --channel value: %s", exc)
             raise typer.Exit(code=1)
 
+    listen_events = None
+    if events is not None:
+        try:
+            listen_events = parse_event_spec(events)
+        except ValueError as exc:
+            logger.error("✖ Invalid --events value: %s", exc)
+            raise typer.Exit(code=1)
+
     mute_event = threading.Event()
     if mute:
         mute_event.set()
@@ -128,6 +142,7 @@ def run(
             port=port,
             midi_port=midi_port,
             listen_channels=listen_channels,
+            listen_events=listen_events,
         )
 
         log_status("Active config: %s", config_path.name)

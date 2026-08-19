@@ -6,12 +6,15 @@ import pytest
 
 from midi2osc.config import (
     ALL_CHANNELS,
+    ALL_EVENTS,
     MappingKey,
     OscMapping,
     example_config_text,
     format_channels,
+    format_events,
     parse_channel_spec,
     parse_config,
+    parse_event_spec,
 )
 
 
@@ -153,6 +156,7 @@ def test_with_overrides() -> None:
         midi_port="B",
         virtual=False,
         listen_channels=frozenset({3}),
+        listen_events=frozenset({"control_change"}),
     )
     assert updated.ip == "2.2.2.2"
     assert updated.port == 1
@@ -160,8 +164,10 @@ def test_with_overrides() -> None:
     assert updated.convert_unmapped is False
     assert updated.virtual is False
     assert updated.listen_channels == frozenset({3})
+    assert updated.listen_events == frozenset({"control_change"})
     assert base.virtual is True
     assert base.listen_channels == ALL_CHANNELS
+    assert base.listen_events == ALL_EVENTS
 
 
 def test_listen_channels_default_to_all(tmp_path: Path) -> None:
@@ -236,6 +242,100 @@ def test_warns_about_mappings_outside_listen_channels(tmp_path: Path, caplog) ->
 )
 def test_format_channels(channels: frozenset[int], expected: str) -> None:
     assert format_channels(channels) == expected
+
+
+def test_listen_events_default_to_all(tmp_path: Path) -> None:
+    path = tmp_path / "no-events.mapping.txt"
+    path.write_text("cc 1 7 -> /volume\n", encoding="utf-8")
+    assert parse_config(path).listen_events == ALL_EVENTS
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("all", ALL_EVENTS),
+        ("any", ALL_EVENTS),
+        ("*", ALL_EVENTS),
+        ("note", {"note_on", "note_off"}),
+        ("notes", {"note_on", "note_off"}),
+        ("note_on", {"note_on"}),
+        ("NOTE_OFF", {"note_off"}),
+        ("cc", {"control_change"}),
+        ("control_change", {"control_change"}),
+        ("pc", {"program_change"}),
+        ("sysex", {"sysex"}),
+        ("note_on, cc", {"note_on", "control_change"}),
+        ("note,pc", {"note_on", "note_off", "program_change"}),
+    ],
+)
+def test_parse_event_spec(spec: str, expected: set[str]) -> None:
+    assert parse_event_spec(spec) == frozenset(expected)
+
+
+@pytest.mark.parametrize("spec", ["", "pitchwheel", "note_on,,cc", "cc pc", "1"])
+def test_parse_event_spec_rejects_invalid(spec: str) -> None:
+    with pytest.raises(ValueError):
+        parse_event_spec(spec)
+
+
+def test_events_setting_is_parsed(tmp_path: Path) -> None:
+    path = tmp_path / "events.mapping.txt"
+    path.write_text("events = note_on, cc\ncc 1 7 -> /volume\n", encoding="utf-8")
+    assert parse_config(path).listen_events == frozenset({"note_on", "control_change"})
+
+
+def test_events_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "events-alias.mapping.txt"
+    path.write_text("message_types: sysex\n", encoding="utf-8")
+    assert parse_config(path).listen_events == frozenset({"sysex"})
+
+
+def test_invalid_events_setting_keeps_all(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "bad-events.mapping.txt"
+    path.write_text("events = pitchwheel\n", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        cfg = parse_config(path)
+    assert cfg.listen_events == ALL_EVENTS
+    assert any("unknown event" in rec.getMessage() for rec in caplog.records)
+
+
+def test_warns_about_mappings_outside_listen_events(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "unreachable-events.mapping.txt"
+    path.write_text(
+        "events = cc\nnote 1 60 -> /clip\ncc 1 7 -> /volume\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        cfg = parse_config(path)
+    assert len(cfg.mappings) == 2
+    assert any(
+        "Mappings for note_on can never trigger" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_note_mapping_reachable_when_only_note_off_is_listened_for(
+    tmp_path: Path, caplog
+) -> None:
+    path = tmp_path / "note-off.mapping.txt"
+    path.write_text("events = note_off\nnote 1 60 -> /clip\n", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="midi2osc"):
+        parse_config(path)
+    assert not any("can never trigger" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        (ALL_EVENTS, "all"),
+        (frozenset(), "none"),
+        (frozenset({"control_change"}), "cc"),
+        (frozenset({"note_on", "note_off"}), "note_on, note_off"),
+        (frozenset({"program_change", "note_on"}), "note_on, pc"),
+    ],
+)
+def test_format_events(events: frozenset[str], expected: str) -> None:
+    assert format_events(events) == expected
 
 
 def test_ignored_lines_are_summarized(tmp_path: Path, caplog) -> None:

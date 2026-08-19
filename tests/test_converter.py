@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from midi2osc.config import MappingKey, OscMapping
+from midi2osc.config import ALL_CHANNELS, MappingKey, OscMapping
 from midi2osc.converter import MidiPortError, resolve_midi_port, route_midi_message, run_converter
 from midi2osc.ports import open_mido_input
 
@@ -132,6 +132,61 @@ def test_channel_filter_always_passes_sysex() -> None:
     )
     assert routed is not None
     assert routed.osc_address == "/midi/sysex"
+
+
+def test_event_filter_drops_other_types() -> None:
+    listen = frozenset({"control_change"})
+    cc = route_midi_message(
+        SimpleNamespace(type="control_change", channel=0, control=7, value=64),
+        {},
+        True,
+        ALL_CHANNELS,
+        listen,
+    )
+    note = route_midi_message(
+        SimpleNamespace(type="note_on", channel=0, note=60, velocity=100),
+        {},
+        True,
+        ALL_CHANNELS,
+        listen,
+    )
+    sysex = route_midi_message(
+        SimpleNamespace(type="sysex", data=[1, 2, 3]),
+        {},
+        True,
+        ALL_CHANNELS,
+        listen,
+    )
+    assert cc is not None
+    assert cc.osc_address == "/midi/channel/1/cc/7"
+    assert note is None
+    assert sysex is None
+
+
+def test_event_filter_separates_note_on_and_note_off() -> None:
+    note_on = SimpleNamespace(type="note_on", channel=0, note=60, velocity=100)
+    note_off = SimpleNamespace(type="note_off", channel=0, note=60, velocity=0)
+
+    only_on = frozenset({"note_on"})
+    assert route_midi_message(note_on, {}, True, ALL_CHANNELS, only_on) is not None
+    assert route_midi_message(note_off, {}, True, ALL_CHANNELS, only_on) is None
+
+    only_off = frozenset({"note_off"})
+    assert route_midi_message(note_on, {}, True, ALL_CHANNELS, only_off) is None
+    routed_off = route_midi_message(note_off, {}, True, ALL_CHANNELS, only_off)
+    assert routed_off is not None
+    assert routed_off.osc_address == "/midi/channel/1/note_off"
+
+
+def test_event_filter_treats_velocity_zero_note_on_as_note_off() -> None:
+    zero_velocity = SimpleNamespace(type="note_on", channel=0, note=60, velocity=0)
+    only_on = frozenset({"note_on"})
+    assert route_midi_message(zero_velocity, {}, True, ALL_CHANNELS, only_on) is None
+    routed = route_midi_message(
+        zero_velocity, {}, True, ALL_CHANNELS, frozenset({"note_off"})
+    )
+    assert routed is not None
+    assert routed.osc_address == "/midi/channel/1/note_off"
 
 
 def test_resolve_exact_and_case_insensitive() -> None:
@@ -431,6 +486,51 @@ def test_channel_filter_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None
         port.callback(SimpleNamespace(type="note_on", channel=1, note=60, velocity=100))
         _wait_until(lambda: client.send_message.called)
         client.send_message.assert_called_once_with("/ch2", 100)
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+
+
+def test_event_filter_blocks_osc_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("midi2osc.converter.PORT_CHECK_S", 0.05)
+    monkeypatch.setattr("midi2osc.converter.QUEUE_POLL_S", 0.01)
+    client = MagicMock()
+    opened: dict[str, object] = {}
+
+    def open_input(name: str, callback=None, *, virtual: bool = False) -> _FakeMidiPort:
+        port = _FakeMidiPort(callback=callback)
+        opened["port"] = port
+        return port
+
+    stop, thread = _start_converter(
+        port_name="IAC",
+        osc_ip="127.0.0.1",
+        osc_port=8000,
+        mappings={
+            MappingKey("note_on", 0, 60): OscMapping("/clip"),
+            MappingKey("control_change", 0, 7): OscMapping("/volume"),
+        },
+        reconnect=False,
+        listen_events=frozenset({"control_change"}),
+        client_factory=lambda ip, port: client,
+        open_input=open_input,
+        list_inputs=lambda: ["IAC"],
+    )
+    try:
+        _wait_until(lambda: "port" in opened)
+        port = opened["port"]
+        assert isinstance(port, _FakeMidiPort)
+
+        port.callback(SimpleNamespace(type="note_on", channel=0, note=60, velocity=100))
+        time.sleep(0.08)
+        client.send_message.assert_not_called()
+
+        port.callback(
+            SimpleNamespace(type="control_change", channel=0, control=7, value=64)
+        )
+        _wait_until(lambda: client.send_message.called)
+        client.send_message.assert_called_once_with("/volume", 64)
     finally:
         stop.set()
         thread.join(timeout=2.0)

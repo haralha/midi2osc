@@ -14,6 +14,7 @@ Designed for live performances, stage automation, and media software such as Res
 - Native integer OSC arguments for velocity and CC values (`0–127`) when no expression is set
 - Fallback routing for unmapped messages (e.g. `/midi/channel/1/note_on`)
 - Channel filter (`channel = all`, `channel = 5`, `channel = 1-4,16`) to ignore everything on other MIDI channels
+- Event filter (`events = all`, `events = note_on, cc`) to ignore message types you do not care about
 - Automatic reconnect when a MIDI device drops
 - Mute OSC output at runtime (`--mute` in the CLI, toggle button in the GUI) for safe local testing
 - Optional virtual MIDI input (`virtual = true`) on macOS/Linux; on Windows use loopMIDI, and on Linux see the [ALSA caveat](#virtual-ports-on-linux-alsa)
@@ -118,6 +119,7 @@ midi2osc example
 midi_port = "MIDI2OSC Bridge"
 virtual = true
 channel = all
+events = all
 ip = "127.0.0.1"
 port = 8000
 convert_unmapped = true
@@ -139,6 +141,7 @@ pc 1 1 -> /qlab/cue/2/start
 | `port` / `osc_port` | Target OSC UDP port (default `7700`) |
 | `convert_unmapped` | If `true`, unmapped messages are sent to `/midi/...` defaults; if `false`, they are only logged |
 | `channel` / `channels` / `midi_channel` | MIDI channel(s) to listen on (default `all`) |
+| `events` / `messages` / `message_types` | MIDI event type(s) to listen for (default `all`) |
 
 ### Listening on specific channels
 
@@ -158,6 +161,29 @@ The CLI can override the file setting:
 ```bash
 midi2osc run show.mapping.txt --channel 5
 midi2osc run show.mapping.txt --channel 1-4,16
+```
+
+### Listening for specific events
+
+By default every supported message type is processed. Set `events` to narrow it down — other types are discarded before mapping, fallback routing, and logging.
+
+```
+events = all              # every supported type (default)
+events = note             # note-on and note-off
+events = note_on          # note-on only
+events = note_on, cc      # combine with commas
+events = cc, pc, sysex    # control change, program change, system exclusive
+```
+
+Accepted names are `note` / `notes`, `note_on`, `note_off`, `cc` / `control` / `control_change`, `pc` / `program` / `program_change`, and `sysex`.
+
+Note-on and note-off are filtered independently, and MIDI convention applies first: a note-on with velocity `0` counts as `note_off`, so `events = note_on` drops it. Use `events = note` to keep both. If a mapping targets an event type you are not listening for, a warning is logged when the config loads.
+
+The CLI can override the file setting:
+
+```bash
+midi2osc run show.mapping.txt --events note_on
+midi2osc run show.mapping.txt --events "cc, pc"
 ```
 
 ### Mapping syntax
@@ -191,6 +217,7 @@ Only `+ - * / // % **`, parentheses, `v`, `int()`, and `float()` are allowed (no
 ```bash
 midi2osc run show.mapping.txt --midi-port "IAC Driver Bus 1" --ip 192.168.1.10 --port 7700
 midi2osc run show.mapping.txt --channel 5
+midi2osc run show.mapping.txt --events note_on,cc
 midi2osc run show.mapping.txt --quiet
 midi2osc run show.mapping.txt --no-reconnect
 midi2osc run show.mapping.txt --mute

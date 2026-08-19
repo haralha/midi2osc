@@ -15,10 +15,12 @@ from pythonosc import udp_client
 
 from midi2osc.config import (
     ALL_CHANNELS,
+    ALL_EVENTS,
     AppConfig,
     MappingKey,
     OscMapping,
     format_channels,
+    format_events,
     parse_config,
 )
 from midi2osc.expr import ExprError, eval_value_expr
@@ -64,6 +66,9 @@ class _OscSendStats:
 
 @dataclass(frozen=True)
 class _DecodedMidi:
+    # Wire type after velocity-0 normalization; ``lookup_type`` folds note_off
+    # into the note_on mapping bucket, so both are needed.
+    event: str
     lookup_type: str
     channel: Optional[int]
     number: Optional[int]
@@ -106,6 +111,7 @@ def _decode_midi(msg: Any) -> Optional[_DecodedMidi]:
             else f"/midi/channel/{display_ch}/note_off"
         )
         return _DecodedMidi(
+            event=msg_type,
             lookup_type="note_on",
             channel=channel,
             number=number,
@@ -121,6 +127,7 @@ def _decode_midi(msg: Any) -> Optional[_DecodedMidi]:
         number = msg.control
         value = msg.value
         return _DecodedMidi(
+            event="control_change",
             lookup_type="control_change",
             channel=channel,
             number=number,
@@ -135,6 +142,7 @@ def _decode_midi(msg: Any) -> Optional[_DecodedMidi]:
         display_ch = channel + 1
         number = msg.program
         return _DecodedMidi(
+            event="program_change",
             lookup_type="program_change",
             channel=channel,
             number=number,
@@ -147,6 +155,7 @@ def _decode_midi(msg: Any) -> Optional[_DecodedMidi]:
     if msg_type == "sysex":
         value = list(msg.data)
         return _DecodedMidi(
+            event="sysex",
             lookup_type="sysex",
             channel=None,
             number=None,
@@ -164,14 +173,20 @@ def route_midi_message(
     mappings: dict[MappingKey, OscMapping],
     convert_unmapped: bool = True,
     listen_channels: frozenset[int] = ALL_CHANNELS,
+    listen_events: frozenset[str] = ALL_EVENTS,
 ) -> Optional[RoutedMessage]:
     """Map a mido-like message to an OSC route, or None if unsupported.
 
-    Messages on a channel outside ``listen_channels`` (0-based) return None and
-    are dropped. SysEx carries no channel and is always routed.
+    Messages whose type is outside ``listen_events`` return None, as do
+    messages on a channel outside ``listen_channels`` (0-based). The event
+    filter sees the normalized wire type, so a velocity-0 note-on counts as
+    ``note_off``. SysEx carries no channel and passes the channel filter.
     """
     decoded = _decode_midi(msg)
     if decoded is None:
+        return None
+
+    if decoded.event not in listen_events:
         return None
 
     if decoded.channel is not None and decoded.channel not in listen_channels:
@@ -246,8 +261,11 @@ def _dispatch_message(
     osc_stats: _OscSendStats,
     muted: bool = False,
     listen_channels: frozenset[int] = ALL_CHANNELS,
+    listen_events: frozenset[str] = ALL_EVENTS,
 ) -> None:
-    routed = route_midi_message(msg, mappings, convert_unmapped, listen_channels)
+    routed = route_midi_message(
+        msg, mappings, convert_unmapped, listen_channels, listen_events
+    )
     if routed is None:
         return
 
@@ -289,6 +307,7 @@ def run_converter(
     virtual: bool = False,
     reconnect: bool = True,
     listen_channels: frozenset[int] = ALL_CHANNELS,
+    listen_events: frozenset[str] = ALL_EVENTS,
     mute_event: Optional[threading.Event] = None,
     client_factory: Optional[Callable[[str, int], Any]] = None,
     open_input: Optional[Callable[..., Any]] = None,
@@ -308,6 +327,8 @@ def run_converter(
 
     ``listen_channels`` holds the 0-based MIDI channels to accept; messages on
     any other channel are dropped without logging. Defaults to all 16.
+    ``listen_events`` holds the wire-level message types to accept, dropped the
+    same way. Defaults to every supported type.
 
     While ``mute_event`` is set, messages are still routed and logged but no
     OSC packets are sent. The event is read per message, so it can be toggled
@@ -383,6 +404,7 @@ def run_converter(
                         osc_stats,
                         muted,
                         listen_channels,
+                        listen_events,
                     )
 
         except MidiPortConfigError:
@@ -427,6 +449,7 @@ def run_from_config(
     log_status("Convert unmapped: %s", config.convert_unmapped)
     log_status("Virtual MIDI port: %s", config.virtual)
     log_status("Listening on MIDI channel: %s", format_channels(config.listen_channels))
+    log_status("Listening for MIDI events: %s", format_events(config.listen_events))
     log_status("Mappings loaded: %s", len(config.mappings))
     log_status(
         "OSC output: %s",
@@ -443,6 +466,7 @@ def run_from_config(
         virtual=config.virtual,
         reconnect=reconnect,
         listen_channels=config.listen_channels,
+        listen_events=config.listen_events,
         mute_event=mute_event,
     )
 
