@@ -16,7 +16,7 @@ Designed for live performances, stage automation, and media software such as Res
 - Channel filter (`channel = all`, `channel = 5`, `channel = 1-4,16`) to ignore everything on other MIDI channels
 - Automatic reconnect when a MIDI device drops
 - Mute OSC output at runtime (`--mute` in the CLI, toggle button in the GUI) for safe local testing
-- Optional virtual MIDI input (`virtual = true`) on macOS/Linux; Windows users can use loopMIDI
+- Optional virtual MIDI input (`virtual = true`) on macOS/Linux; on Windows use loopMIDI, and on Linux see the [ALSA caveat](#virtual-ports-on-linux-alsa)
 - GUI built with PySide6 for easy control, alongside a headless CLI tool
 
 ## Prerequisites
@@ -134,7 +134,7 @@ pc 1 1 -> /qlab/cue/2/start
 | Key | Description |
 |-----|-------------|
 | `midi_port` | MIDI input device name (exact preferred; unique substring also works). With `virtual = true`, this is the name of the port to create. |
-| `virtual` / `virtual_port` / `create_virtual` | If `true`, create a virtual MIDI input (macOS/Linux). On Windows use loopMIDI and keep this `false`. |
+| `virtual` / `virtual_port` / `create_virtual` | If `true`, create a virtual MIDI input (macOS/Linux). On Windows use loopMIDI and keep this `false`. On Linux it depends on the sending application — see [the ALSA caveat](#virtual-ports-on-linux-alsa). |
 | `ip` / `host` | Target OSC IP (default `127.0.0.1`) |
 | `port` / `osc_port` | Target OSC UDP port (default `7700`) |
 | `convert_unmapped` | If `true`, unmapped messages are sent to `/midi/...` defaults; if `false`, they are only logged |
@@ -232,21 +232,39 @@ The icon lives in `midi2osc/assets/`: `icon.png` (1024x1024 master, also used fo
 
 ### Virtual ports on Linux (ALSA)
 
-`virtual = true` creates an ALSA **sequencer** port. Most Linux MIDI software finds it, but some hosts — REAPER among them — enumerate only ALSA **rawmidi** hardware devices and will never list a sequencer port. A quick way to tell: if the host does not show the always-present `Midi Through` device, it is rawmidi-only.
+**`virtual = true` is unreliable on Linux, and whether it works depends entirely on the sending application.** It creates an ALSA **sequencer** port. Plenty of Linux MIDI software finds it, but several hosts — REAPER among them — enumerate only ALSA **rawmidi** hardware devices and will never list a sequencer port, no matter how the port is named or when it is created.
 
-No userspace program can create a rawmidi device, so this cannot be solved from inside midi2osc. Load the kernel's virtual MIDI module instead, which provides devices visible to both worlds:
+A quick way to tell which kind of host you have: look for `Midi Through` in its MIDI device list. That device is present on every Linux system but exists only in the sequencer, so a host that does not show it is rawmidi-only.
+
+No userspace program can create a rawmidi device — that is a kernel privilege — so this cannot be fixed from inside midi2osc. Use the kernel's virtual MIDI module instead, which provides loopback devices visible to *both* worlds.
+
+Configure the module, giving the card a recognisable name and just one device instead of the default four:
 
 ```bash
-sudo modprobe snd-virmidi
-aplaymidi -l                 # should now list "Virtual Raw MIDI 1-0" … "1-3"
-echo snd-virmidi | sudo tee /etc/modules-load.d/snd-virmidi.conf   # load at boot
+echo 'options snd-virmidi id="MidiLoopback" midi_devs=1' | sudo tee /etc/modprobe.d/snd-virmidi.conf
+echo snd-virmidi | sudo tee /etc/modules-load.d/snd-virmidi.conf
 ```
 
-Then stop creating your own port and attach to virmidi instead:
+The first file sets the options, the second loads the module at every boot. To load it now without rebooting:
+
+```bash
+sudo modprobe -r snd-virmidi     # only needed if it is already loaded with other options
+sudo modprobe snd-virmidi
+```
+
+Verify that the port turned up in both layers — `amidi` lists the rawmidi side that hosts like REAPER read, `aplaymidi` the sequencer side that midi2osc reads:
+
+```bash
+amidi -l
+aplaymidi -l
+midi2osc list                    # the exact name to put in your config
+```
+
+Then stop creating your own port and attach to the loopback instead:
 
 ```
 virtual = false
-midi_port = "Virtual Raw MIDI 1-0"
+midi_port = "MidiLoopback"
 ```
 
-Point the sending application at the same virmidi device. It writes to the rawmidi side, midi2osc reads the sequencer side of the same port — so both must use the *same* number (`1-0` in both places, not `1-0` and `1-1`).
+Name matching accepts a unique substring, so you rarely need the full ALSA name with its client and port numbers. Point the sending application at the same loopback device: it writes to the rawmidi side, midi2osc reads the sequencer side of the same port. If you kept the default `midi_devs=4`, both ends must use the *same* one — `1-0` in both places, not `1-0` and `1-1`.

@@ -106,8 +106,11 @@ EXAMPLE_CONFIG = """# midi2osc Configuration File Example
 midi_port = "MIDI2OSC Bridge"
 
 # Create a virtual MIDI input port with that name? (true/false)
-# macOS/Linux: mido creates the port so DAWs can send MIDI into this app.
+# macOS: the port is created so DAWs can send MIDI into this app.
 # Windows: not supported — use loopMIDI (or similar) and set virtual = false.
+# Linux: creates an ALSA sequencer port. Some hosts (e.g. REAPER) only list
+#   rawmidi hardware and will not see it — then use snd-virmidi and set
+#   virtual = false. See "Virtual ports on Linux" in the readme.
 virtual = true
 
 # Which MIDI channel(s) to listen on (default: all)
