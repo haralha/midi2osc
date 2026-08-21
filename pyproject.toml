@@ -66,3 +66,15 @@ build-mac = ["clean", "build-cli", "build-gui-mac", "clean-temp"]
 
 # Default compound build task for Windows and Linux
 build = ["clean", "build-cli", "build-gui-single", "clean-temp"]
+
+[tool.poe.tasks.release]
+help = "Bumper versjon, committer, tagger og pusher til GitHub"
+args = [{ name = "version", positional = true, required = true }]
+shell = """
+poetry version $version && \
+git add pyproject.toml && \
+git commit -m "chore: bump version to v$version" && \
+git push origin main && \
+git tag -a "v$version" -m "Release v$version" && \
+git push origin "v$version"
+"""
